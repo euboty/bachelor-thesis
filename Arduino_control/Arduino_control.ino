@@ -1,136 +1,167 @@
-#include <HX711.h>    //Loadcell Verstärker Library
-#include <Servo.h>    //Servo Library
 
+// Libraries
+#include <HX711.h>    
+#include <Servo.h>    
+
+// Pi Value
 #define PI 3.1415926535897932384626433832795
 
-HX711 DMS_LEFT;       //Loadcell Links
-HX711 DMS_RIGHT;      //Loadcell Rechts
-Servo DS535_LEFT;     //OS-System Servo Links
-Servo DS535_RIGHT;    //OS-System Servo Rechts
-Servo AMX_0902_LEFT;  //WS-System Servo Links
-Servo AMX_0902_RIGHT; //WS-System Servo Rechts
+// Force-Sensing Objects
+HX711 FORCE_RIGHT;           
+HX711 FORCE_LEFT;      
 
-//Loadcell Pinout
-const byte DMS_LEFT_DOUT_PIN = 3;
-const byte DMS_LEFT_SCK_PIN = 4;
-const byte DMS_RIGHT_DOUT_PIN = 12; 
-const byte DMS_RIGHT_SCK_PIN = 11;
+// Servo Objects
+Servo OS_RIGHT;                      
+Servo OS_LEFT;                      
+Servo WS_RIGHT;                  
+Servo WS_LEFT;                    
 
-//Actuators Pinout
-const byte DS535_LEFT_PIN = 6;
-const byte DS535_RIGHT_PIN = 5;
-const byte AMX_0902_LEFT_PIN = 9;
-const byte AMX_0902_RIGHT_PIN = 10;
+// Force-Sensor Pinout
+const byte FORCE_RIGHT_DOUT_PIN = 3;
+const byte FORCE_RIGHT_SCK_PIN = 4;
+const byte FORCE_LEFT_DOUT_PIN = 12; 
+const byte FORCE_LEFT_SCK_PIN = 11;
 
-//Timing variables
-int mister_t;
-int period = 3;
+// Servo Pinout
+const byte OS_RIGHT_PIN = 5;
+const byte OS_LEFT_PIN = 6;
+const byte WS_RIGHT_PIN = 9;
+const byte WS_LEFT_PIN = 10;
 
-//Variablen für gleitenden Durchschnitt der DMS Messwerte
-long temp_dms_value_1_left = 0;
-long temp_dms_value_2_left = 0;
-long temp_dms_value_1_right = 0;
-long temp_dms_value_2_right = 0;
-long temp_dms_value_1;
-long temp_dms_value_2;
+// Timing Vars
+int mister_t; //Iterator in Motorcontroll Loops KANN WEG ???
+const int SERVO_TIMEOUT = 3; //Step in Motorcontroll Loops
 
-//Programmauswahl
+// Force-Sensing Vars
+long force_prev_value_right = 0;
+long force_value_right = 0;
+long force_prev_value_left = 0;
+long force_value_left = 0;
+long force_prev_value_avg;
+long force_value_avg;
+
+// Program (Mode)
 int Program = 1;
 char recievedChar;
 
-// ÖS-Antriebspositionierung
-int Winkelbereich_OS = 630;
-int pos_left;
-int OS_Pos_offen_left = 1732;
-int OS_Pos_geschlossen_left = OS_Pos_offen_left-Winkelbereich_OS;
-int pos_right;
-int OS_Pos_offen_right = 1550;
-int OS_Pos_geschlossen_right = OS_Pos_offen_right + Winkelbereich_OS;
+/*
+ * Callibration:
+ * Following values describe the opening and closing positions of the servos (PWM signal).
+ * The sketch "Servo_callibration" was used to figure those values.
+ * Perspective is mover to foil:
+ * OS_LEFT (OS Left)
+ *  open 1020
+ *  closed 1620
+ * OS_RIGHT (OS Right)
+ *  open 1700
+ *  closed 1094
+ * WS_LEFT (WS Left)
+ *  extended 2260
+ *  pull 1200
+ * WS_RiGHT (WS Right)
+ *  extended 0
+ *  pull 1505
+ *  
+ *  Those are set as postions and a motion range is set (f.e. OS_MOTION_RANGE = 1700 - 1094). This way both servos have to move the same amount.
+ */
+
+// OS Servo Callibration
+int OS_MOTION_RANGE = 605;                                                // same for both servos
+int os_pos_right;                                                         // tracks is position
+int OS_POS_OPEN_RIGHT = 1700;                                             // callibration postition
+int OS_POS_CLOSED_RIGHT = OS_POS_OPEN_RIGHT-OS_MOTION_RANGE;              // callibration postition
+int os_pos_left;                                                          // tracks is position
+int OS_POS_OPEN_LEFT = 1018;                                              // callibration postition
+int OS_POS_CLOSED_LEFT = OS_POS_OPEN_LEFT + OS_MOTION_RANGE;              // not in use, just as explaination
 
 
-// WS-Antriebspositioinierung
-int KSA_left; 
-int KSA_left_null = 1300;
-int KSA_right; 
-int KSA_right_null = 1855;
-int KSA_schritt = 18; 
+// WS Servo Callibration
+int WS_MOTION_RANGE = 1060; //Werte des PWM Signal mit dem Sketch Servo_Callibration ermittelt
+int ws_pos_right; 
+int ws_pos_ext_right = 445;
+int ws_pos_left; 
+int ws_pos_ext_left = 2260;
+int WS_STEP = 18; 
 
-//***VORBEREITENDES SETUP PROGRAMM*** 
+//*** Preparation before loop*** 
 void setup() {
-  //Konfiguration der DMS Links und Rechts
-  DMS_LEFT.begin(DMS_LEFT_DOUT_PIN, DMS_LEFT_SCK_PIN);
-  DMS_LEFT.is_ready();
-  DMS_RIGHT.begin(DMS_RIGHT_DOUT_PIN, DMS_RIGHT_SCK_PIN);
-  DMS_RIGHT.is_ready();
+  // configuration of servos
+  OS_RIGHT.attach(OS_RIGHT_PIN);
+  OS_LEFT.attach(OS_LEFT_PIN);
+  WS_RIGHT.attach(WS_RIGHT_PIN);
+  WS_LEFT.attach(WS_LEFT_PIN);
 
-  //Konfiguration der Antriebe
-  DS535_LEFT.attach(DS535_LEFT_PIN);
-  DS535_RIGHT.attach(DS535_RIGHT_PIN);
-  AMX_0902_LEFT.attach(AMX_0902_LEFT_PIN);
-  AMX_0902_RIGHT.attach(AMX_0902_RIGHT_PIN);
+  // move servos in starting position and save as is position
+  OS_RIGHT.writeMicroseconds(OS_POS_OPEN_RIGHT);
+  OS_LEFT.writeMicroseconds(OS_POS_OPEN_LEFT);
+  WS_RIGHT.writeMicroseconds(ws_pos_ext_right);
+  WS_LEFT.writeMicroseconds(ws_pos_ext_left);
+  os_pos_right = OS_POS_OPEN_RIGHT;
+  os_pos_left = OS_POS_OPEN_LEFT;
+  ws_pos_right = ws_pos_ext_right;
+  ws_pos_left = ws_pos_ext_left; 
 
-  //Positionieren der Antriebe
-  DS535_LEFT.writeMicroseconds(OS_Pos_offen_left);
-  DS535_RIGHT.writeMicroseconds(OS_Pos_offen_right);
-  AMX_0902_LEFT.writeMicroseconds(KSA_left_null);
-  AMX_0902_RIGHT.writeMicroseconds(KSA_right_null);
+  // attach buildin LED as status LED
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
 
-  //Speichern der ursprunglichen Positionierung
-  KSA_left = KSA_left_null;
-  KSA_right = KSA_right_null; 
-  pos_left = OS_Pos_offen_left;
-  pos_right = OS_Pos_offen_right;
+  // Configuration of Force-Sensors
+  FORCE_RIGHT.begin(FORCE_RIGHT_DOUT_PIN, FORCE_RIGHT_SCK_PIN);
+  FORCE_RIGHT.is_ready();
+  FORCE_LEFT.begin(FORCE_LEFT_DOUT_PIN, FORCE_LEFT_SCK_PIN);
+  FORCE_LEFT.is_ready();
+  ledDelayBlink(2000, 10);                                                                 // warmup time for strain gauges with blinking indator led - delay 2000 milliseconds with 10 blinks                                                         
+  FORCE_RIGHT.set_scale();
+  FORCE_RIGHT.tare();
+  FORCE_RIGHT.get_units(10);
+  FORCE_RIGHT.set_scale();
+  FORCE_LEFT.set_scale();
+  FORCE_LEFT.tare();
+  FORCE_LEFT.get_units(10);
+  FORCE_LEFT.set_scale();
+  ledDelayBlink(1000, 5);
 
-  //Kalibrieirung von DMS ohne Last
-  DMS_LEFT.set_scale();
-  DMS_LEFT.tare();
-  DMS_LEFT.get_units(10);
-  DMS_LEFT.set_scale();
-  DMS_RIGHT.set_scale();
-  DMS_RIGHT.tare();
-  DMS_RIGHT.get_units(10);
-  DMS_RIGHT.set_scale();
-  delay(500);
-
-  //Messung der unbelasteten DMS-Werte und bilden ursprünglichen Wertes des gleitenden Durchsschnittes
-  temp_dms_value_1_right = DMS_RIGHT.read_average(20);
-  temp_dms_value_1_left = DMS_LEFT.read_average(20);
-  temp_dms_value_1 = (temp_dms_value_1_right/1000 + temp_dms_value_1_left/100)/2;
-  delay(500);
-
-  //Baudrate des seriellen Ports (:= 57,6 kbps)
+  //average of force is value 
+  force_prev_value_left = FORCE_LEFT.read_average(20);
+  force_prev_value_right = FORCE_RIGHT.read_average(20);
+  force_prev_value_avg = (force_prev_value_left/1000 + force_prev_value_right/100)/2;
+  ledDelayBlink(500, 20);
+  
+  //Baudrate (Communication Speed) of serial port (:= 57,6 kbps)
   Serial.begin(57600);      
 }
 
-//Hauptprogramm
+//*** Main Loop*** 
 void loop() {
-    
-  //Kommunikation mit dem Webserver
+  // Communication with Web-Server
   recvOneChar();
-
-  //Programm zum Öffnen
+  
   if  (Program == 1) {
     openOS();
   } 
  
-  //Programm zum Schließen
   if  (Program == 2) {
     closeOS();
   } 
   
-  //Programm zur Kraftregelung der WS-Position
-  if (Program == 3) {
-    adaptiveWS();
+  else if (Program == 3) {
+    //adaptiveWS();
   }
   
-  //Programm zur WS-Positionierung nach Bahnkurve
-  if (Program == 4) {
+  else if (Program == 4) {
     configuredWS();
   }
+
+  // THIS HERE IS JUST FOR TESTING AND CAUSES EXTREM JITTER IN ALL SERVOS --> Trying out other HX711 library next to fix jitter
+  force_prev_value_left = FORCE_LEFT.read();
+  force_prev_value_right = FORCE_RIGHT.read();
+  Serial.print(force_prev_value_left);
+  Serial.print(" ");
+  Serial.println(force_prev_value_right);
 }
    
 
-//Funktionen zum Erhalten der Anweisungen vom Server
+// Communication with Web-Server
 void recvOneChar() {
   if (Serial.available() > 0) {
     recievedChar = Serial.read();
@@ -138,133 +169,143 @@ void recvOneChar() {
   }
 }
 
-//Programme
 
-void openOS() {
-  //Positionieren der WS-Antriebe
-  AMX_0902_LEFT.writeMicroseconds(KSA_left_null);
-  AMX_0902_RIGHT.writeMicroseconds(KSA_right_null);
+// *** PROGRAMS ***
+void openOS() {  
+  // postioning of ws servos
+  WS_RIGHT.writeMicroseconds(ws_pos_ext_right);
+  WS_LEFT.writeMicroseconds(ws_pos_ext_left);
   
-  //Positionieren der ÖS-Antriebe nach Bahnkurve
-  if ( pos_left == OS_Pos_geschlossen_left && pos_right == OS_Pos_geschlossen_right) {
-    for (mister_t = 0; mister_t <= 81; mister_t = mister_t + period){
-      pos_left = OS_Pos_geschlossen_left + (630 * sin((PI/162) * mister_t));
-      pos_right = OS_Pos_geschlossen_right -(630 * sin((PI/162) * mister_t)); 
-      DS535_LEFT.writeMicroseconds(pos_left);
-      DS535_RIGHT.writeMicroseconds(pos_right);
-
-      //Aktualisierungsrate der Antriebsposition
-      delay(3);   
-    } 
-  }
+  // positioning of os servos following a sine accelaration curve
+  if ( os_pos_right == OS_POS_CLOSED_RIGHT && os_pos_left == OS_POS_CLOSED_LEFT) {
+    for (mister_t = 0; mister_t <= 81; mister_t = mister_t + SERVO_TIMEOUT){
+        os_pos_right = OS_POS_CLOSED_RIGHT + (OS_MOTION_RANGE * sin((PI/162) * mister_t)); 
+        os_pos_left = OS_POS_CLOSED_LEFT -(OS_MOTION_RANGE * sin((PI/162) * mister_t)); 
+        OS_RIGHT.writeMicroseconds(os_pos_right);                                     
+        OS_LEFT.writeMicroseconds(os_pos_left); 
+        delay(SERVO_TIMEOUT);  
+    }
+  } 
 }  
 
 void closeOS() {
-  //Positionieren der WS-Antriebe
-  AMX_0902_LEFT.writeMicroseconds(KSA_left_null);
-  AMX_0902_RIGHT.writeMicroseconds(KSA_right_null);
+  // postioning of ws servos
+  WS_RIGHT.writeMicroseconds(ws_pos_ext_right);
+  WS_LEFT.writeMicroseconds(ws_pos_ext_left);
 
-  //Positionieren der ÖS-Antriebe nach Bahnkurve
-  if ( pos_left == OS_Pos_offen_left && pos_right == OS_Pos_offen_right){
+  // positioning of os servos following a sine accelaration curve
+  if ( os_pos_right == OS_POS_OPEN_RIGHT && os_pos_left == OS_POS_OPEN_LEFT){
     for (mister_t = 0; mister_t <= 81; mister_t = mister_t + 3){
-      pos_left = OS_Pos_offen_left -(630 * sin((PI/162) * mister_t));
-      pos_right = OS_Pos_offen_right + (630 * sin((PI/162) * mister_t));        
-      DS535_LEFT.writeMicroseconds(pos_left);
-      DS535_RIGHT.writeMicroseconds(pos_right);
-      //Aktualisierungsrate der Antriebsposition
-      delay(3);
+        os_pos_right = OS_POS_OPEN_RIGHT -(OS_MOTION_RANGE * sin((PI/162) * mister_t));
+        os_pos_left = OS_POS_OPEN_LEFT + (OS_MOTION_RANGE * sin((PI/162) * mister_t));        
+        OS_RIGHT.writeMicroseconds(os_pos_right);
+        OS_LEFT.writeMicroseconds(os_pos_left);
+        delay(SERVO_TIMEOUT);
     }
   }
 }
 
 void configuredWS() {
-  //Positionieren der OS-Antriebe
-  DS535_LEFT.writeMicroseconds(OS_Pos_geschlossen_left);
-  DS535_RIGHT.writeMicroseconds(OS_Pos_geschlossen_right);
+  // postioning of os servos
+  OS_RIGHT.writeMicroseconds(OS_POS_CLOSED_RIGHT);
+  OS_LEFT.writeMicroseconds(OS_POS_CLOSED_LEFT);
 
-  //Positionieren der WS-Antriebe nach Bahnkurve
+  // positioning of ws servos following a sine accelaration curve
   for (mister_t = 0; mister_t <= 144; mister_t = mister_t + 3){
-    KSA_left = (int) (KSA_left_null + (176.5 * sin((PI/144) * mister_t)));
-    KSA_right = (int) (KSA_right_null - (176.5 * sin((PI/144) * mister_t))); 
-    AMX_0902_LEFT.writeMicroseconds(KSA_left);      
-    AMX_0902_RIGHT.writeMicroseconds(KSA_right);
-    //Aktualisierungsrate der Antriebsposition
-    delay(3);
+      ws_pos_right = (int) (ws_pos_ext_right + (WS_MOTION_RANGE * sin((PI/144) * mister_t)));
+      ws_pos_left = (int) (ws_pos_ext_left - (WS_MOTION_RANGE * sin((PI/144) * mister_t))); 
+      WS_RIGHT.writeMicroseconds(ws_pos_right);      
+      WS_LEFT.writeMicroseconds(ws_pos_left);
+      delay(SERVO_TIMEOUT);
   }   
 }
 
+
 void adaptiveWS() {
-  //Positionierung der ÖS-Motoren
-  DS535_LEFT.writeMicroseconds(OS_Pos_geschlossen_left);
-  DS535_RIGHT.writeMicroseconds(OS_Pos_geschlossen_right); 
+  /*
+   * OLD FUNCTION THAZ DOES NOT WORK PROPERLY WITH NEW HARDWARE -- IGNORE
+   */
+  // postioning of os servos
+  OS_RIGHT.writeMicroseconds(OS_POS_CLOSED_RIGHT);
+  OS_LEFT.writeMicroseconds(OS_POS_CLOSED_LEFT); 
   
-  //Einlesen der DMS-Werte
-  temp_dms_value_2_right = DMS_RIGHT.read(); 
-  temp_dms_value_2_left = DMS_LEFT.read();
+  // read force values
+  force_value_left = FORCE_LEFT.read(); 
+  force_value_right = FORCE_RIGHT.read();
 
   //Berechnen des gleitenden Durchnschnitts (Mit Offset)
-  temp_dms_value_2 = (temp_dms_value_2_right/1000 + temp_dms_value_2_left/100)/2;
+  force_value_avg = (force_value_left/1000 + force_value_right/100)/2;
 
   //Aktueller Durchnitt größer als der davor gemessene
-  if (temp_dms_value_2 > temp_dms_value_1) { 
+  if (force_value_avg > force_prev_value_avg) { 
     //Positionierung der ÖS-Motoren WARUM?
-    //DS535_LEFT.writeMicroseconds(OS_Pos_geschlossen_left);
-    //DS535_RIGHT.writeMicroseconds(OS_Pos_geschlossen_right);
+    //OS_RIGHT.writeMicroseconds(OS_POS_CLOSED_RIGHT);
+    //OS_LEFT.writeMicroseconds(OS_POS_CLOSED_LEFT);
     
     //Anpassen der WS-Position
-    KSA_left = KSA_left + KSA_schritt;
-    KSA_right = KSA_right - KSA_schritt;     
+    ws_pos_right = ws_pos_right + WS_STEP;
+    ws_pos_left = ws_pos_left - WS_STEP;     
     //Positionierung der WS-Antriebe
-    AMX_0902_LEFT.writeMicroseconds(KSA_left);
-    AMX_0902_RIGHT.writeMicroseconds(KSA_right);
+    WS_RIGHT.writeMicroseconds(ws_pos_right);
+    WS_LEFT.writeMicroseconds(ws_pos_left);
 
     //Überschreiben des gleitenden Durchschnitts
-    temp_dms_value_1 = temp_dms_value_2;
+    force_prev_value_avg = force_value_avg;
 
-    //Wartezeit, bis der nächste DMS-Wert verfügbar wird    
+    //Wartezeit, bis der nächste FORCE-Wert verfügbar wird    
     delay(100);
   }
 
   //Aktueller Durchnitt kleiner als der davor gemessene
-  if (temp_dms_value_2 < temp_dms_value_1) { 
+  else if (force_value_avg < force_prev_value_avg) { 
 
     //Positionierung der ÖS-Motoren
-    DS535_LEFT.writeMicroseconds(OS_Pos_geschlossen_left);
-    DS535_RIGHT.writeMicroseconds(OS_Pos_geschlossen_right);
+    OS_RIGHT.writeMicroseconds(OS_POS_CLOSED_RIGHT);
+    OS_LEFT.writeMicroseconds(OS_POS_CLOSED_LEFT);
       
     //Anpassen der WS-Position
-    KSA_left = KSA_left - KSA_schritt;
-    KSA_right = KSA_right + KSA_schritt;
+    ws_pos_right = ws_pos_right - WS_STEP;
+    ws_pos_left = ws_pos_left + WS_STEP;
 
     //Positionierung der WS-Antriebe
-    AMX_0902_LEFT.writeMicroseconds(KSA_left);
-    AMX_0902_RIGHT.writeMicroseconds(KSA_right);
+    WS_RIGHT.writeMicroseconds(ws_pos_right);
+    WS_LEFT.writeMicroseconds(ws_pos_left);
      
     //Überschreiben des gleitenden Durchschnitts
-    temp_dms_value_1 = temp_dms_value_2;
+    force_prev_value_avg = force_value_avg;
 
-    //Wartezeit, bis der nächste DMS-Wert verfügbar wird WARUM
+    //Wartezeit, bis der nächste FORCE-Wert verfügbar wird WARUM
     delay(100);
   }
+  
   //Aktueller Durchnitt gleich dem davor gemessenen
-  if (temp_dms_value_2 == temp_dms_value_1) { 
+  else if (force_value_avg == force_prev_value_avg) { 
 
     //Positionierung der ÖS-Motoren
-    DS535_LEFT.writeMicroseconds(OS_Pos_geschlossen_left);
-    DS535_RIGHT.writeMicroseconds(OS_Pos_geschlossen_right);
+    OS_RIGHT.writeMicroseconds(OS_POS_CLOSED_RIGHT);
+    OS_LEFT.writeMicroseconds(OS_POS_CLOSED_LEFT);
 
     //Erhalten der WS-Position
-    KSA_left = KSA_left;
-    KSA_right = KSA_right;     
+    ws_pos_right = ws_pos_right;
+    ws_pos_left = ws_pos_left;     
 
     //Positionierung der WS-Antriebe
-    AMX_0902_LEFT.writeMicroseconds(KSA_left);
-    AMX_0902_RIGHT.writeMicroseconds(KSA_right);
+    WS_RIGHT.writeMicroseconds(ws_pos_right);
+    WS_LEFT.writeMicroseconds(ws_pos_left);
 
     //Überschreiben des gleitenden Durchschnitts
-    temp_dms_value_1 = temp_dms_value_2;
+    force_prev_value_avg = force_value_avg;
 
-    //Wartezeit, bis der nächste DMS-Wert verfügbar wird    
+    //Wartezeit, bis der nächste FORCE-Wert verfügbar wird    
     delay(100);
   }
+}
+
+void ledDelayBlink(int delay_time, int blink_times){
+  for (int i = 0; i < blink_times; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(delay_time/(blink_times*2));
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(delay_time/(blink_times*2));
+  }         
 }
