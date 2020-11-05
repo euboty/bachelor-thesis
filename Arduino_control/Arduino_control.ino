@@ -42,7 +42,6 @@ long force_value_avg;
 
 // Program (Mode)
 int Program = 1;
-char recievedChar;
 
 /*
  * Callibration:
@@ -58,7 +57,7 @@ char recievedChar;
  * WS_LEFT (WS Left)
  *  extended 2260
  *  pull 1200
- * WS_RiGHT (WS Right)
+ * WS_RIGHT (WS Right)
  *  extended 0
  *  pull 1505
  *  
@@ -71,7 +70,7 @@ int os_pos_right;                                                         // tra
 int OS_POS_OPEN_RIGHT = 1700;                                             // callibration postition
 int OS_POS_CLOSED_RIGHT = OS_POS_OPEN_RIGHT-OS_MOTION_RANGE;              // callibration postition
 int os_pos_left;                                                          // tracks is position
-int OS_POS_OPEN_LEFT = 1018;                                              // callibration postition
+int OS_POS_OPEN_LEFT = 1020;                                              // callibration postition
 int OS_POS_CLOSED_LEFT = OS_POS_OPEN_LEFT + OS_MOTION_RANGE;              // not in use, just as explaination
 
 
@@ -80,11 +79,14 @@ int WS_MOTION_RANGE = 1060; //Werte des PWM Signal mit dem Sketch Servo_Callibra
 int ws_pos_right; 
 int ws_pos_ext_right = 445;
 int ws_pos_left; 
-int ws_pos_ext_left = 2260;
+int ws_pos_ext_left = 2200;
 int WS_STEP = 18; 
 
 //*** Preparation before loop*** 
 void setup() {
+  Serial.begin(57600);   //Baudrate (Communication Speed) of serial port (:= 57,6 kbps)
+  delay(10);
+  
   // configuration of servos
   OS_RIGHT.attach(OS_RIGHT_PIN);
   OS_LEFT.attach(OS_LEFT_PIN);
@@ -105,6 +107,7 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
 
+  /*
   // Configuration of Force-Sensors
   FORCE_RIGHT.begin(FORCE_RIGHT_DOUT_PIN, FORCE_RIGHT_SCK_PIN);
   FORCE_RIGHT.is_ready();
@@ -126,16 +129,13 @@ void setup() {
   force_prev_value_right = FORCE_RIGHT.read_average(20);
   force_prev_value_avg = (force_prev_value_left/1000 + force_prev_value_right/100)/2;
   ledDelayBlink(500, 20);
-  
-  //Baudrate (Communication Speed) of serial port (:= 57,6 kbps)
-  Serial.begin(57600);      
+  */   
 }
 
 //*** Main Loop*** 
 void loop() {
   // Communication with Web-Server
   recvOneChar();
-  
   if  (Program == 1) {
     openOS();
   } 
@@ -151,18 +151,20 @@ void loop() {
   else if (Program == 4) {
     configuredWS();
   }
-
+  /*
   // THIS HERE IS JUST FOR TESTING AND CAUSES EXTREM JITTER IN ALL SERVOS --> Trying out other HX711 library next to fix jitter
   force_prev_value_left = FORCE_LEFT.read();
   force_prev_value_right = FORCE_RIGHT.read();
   Serial.print(force_prev_value_left);
   Serial.print(" ");
   Serial.println(force_prev_value_right);
+  */
 }
    
 
 // Communication with Web-Server
 void recvOneChar() {
+  char recievedChar;
   if (Serial.available() > 0) {
     recievedChar = Serial.read();
     Program = recievedChar;
