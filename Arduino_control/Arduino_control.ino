@@ -1,26 +1,44 @@
-
+/*******************************************************
+ * This program is the main program for thebachelor thesis Kontibat mechatronic gripper.
+ * Author: Florian Geissler
+ */
+ 
 // Libraries
-#include <HX711.h>    
+#include <HX711_ADC.h>
 #include <Servo.h>    
 
+/*
+ * **********************************************************************************************************
+ * ********************************************  GLOBAL  ****************************************************
+ * **********************************************************************************************************
+ */
+
 // Pi Value
-#define PI 3.1415926535897932384626433832795
+#define PI 3.1415926535897932384626433832795        
+              
+// Timing Vars
+int mister_t; //Iterator in Motorcontroll Loops KANN WEG ???
+const int SERVO_TIMEOUT = 3; //Step in Motorcontroll Loops
 
-// Force-Sensing Objects
-HX711 FORCE_RIGHT;           
-HX711 FORCE_LEFT;      
-
-// Servo Objects
-Servo OS_RIGHT;                      
-Servo OS_LEFT;                      
-Servo WS_RIGHT;                  
-Servo WS_LEFT;                    
-
+// Program (Mode)
+int Program = 1;
 // Force-Sensor Pinout
-const byte FORCE_RIGHT_DOUT_PIN = 3;
-const byte FORCE_RIGHT_SCK_PIN = 4;
-const byte FORCE_LEFT_DOUT_PIN = 12; 
-const byte FORCE_LEFT_SCK_PIN = 11;
+const byte LOADCELL_RIGHT_DOUT_PIN = 3;
+const byte LOADCELL_RIGHT_SCK_PIN = 4;
+const byte LOADCELL_LEFT_DOUT_PIN = 12; 
+const byte LOADCELL_LEFT_SCK_PIN = 11;
+
+// Loadcell HX711 Constructor (dout pin, sck pin)
+HX711_ADC LOADCELL_RIGHT(LOADCELL_RIGHT_DOUT_PIN, LOADCELL_RIGHT_SCK_PIN);
+HX711_ADC LOADCELL_LEFT(LOADCELL_LEFT_DOUT_PIN, LOADCELL_LEFT_SCK_PIN); 
+
+// Loadcell Vars
+long loadcell_prev_value_right = 0;
+long loadcell_value_right = 0;
+long loadcell_prev_value_left = 0;
+long loadcell_value_left = 0;
+long loadcell_prev_value_avg;
+long loadcell_value_avg;
 
 // Servo Pinout
 const byte OS_RIGHT_PIN = 5;
@@ -28,20 +46,11 @@ const byte OS_LEFT_PIN = 6;
 const byte WS_RIGHT_PIN = 9;
 const byte WS_LEFT_PIN = 10;
 
-// Timing Vars
-int mister_t; //Iterator in Motorcontroll Loops KANN WEG ???
-const int SERVO_TIMEOUT = 3; //Step in Motorcontroll Loops
-
-// Force-Sensing Vars
-long force_prev_value_right = 0;
-long force_value_right = 0;
-long force_prev_value_left = 0;
-long force_value_left = 0;
-long force_prev_value_avg;
-long force_value_avg;
-
-// Program (Mode)
-int Program = 1;
+// Servos
+Servo OS_RIGHT;                      
+Servo OS_LEFT;                      
+Servo WS_RIGHT;                  
+Servo WS_LEFT; 
 
 /*
  * Callibration:
@@ -82,18 +91,34 @@ int ws_pos_left;
 int ws_pos_ext_left = 2200;
 int WS_STEP = 18; 
 
-//*** Preparation before loop*** 
+/*
+ * **********************************************************************************************************
+ * ********************************************  FUNCTIONS  *************************************************
+ * **********************************************************************************************************
+ */
+ 
 void setup() {
-  Serial.begin(57600);   //Baudrate (Communication Speed) of serial port (:= 57,6 kbps)
+  /*
+   * Setup Program - just runs once on startup. Initializes servos and loadcells and sets start vars.
+   * Status is displayed through buildin LED.
+   */
+  // baudrate (communication speed) of serial port (:= 57,6 kbps)
+  Serial.begin(57600);   
   delay(10);
   
+  // attach buildin LED as status LED
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+
+  // SERVOS:
+  ledDelayBlink(1000, 1);
   // configuration of servos
   OS_RIGHT.attach(OS_RIGHT_PIN);
   OS_LEFT.attach(OS_LEFT_PIN);
   WS_RIGHT.attach(WS_RIGHT_PIN);
   WS_LEFT.attach(WS_LEFT_PIN);
-
-  // move servos in starting position and save as is position
+  
+  // move servos in starting position and save position
   OS_RIGHT.writeMicroseconds(OS_POS_OPEN_RIGHT);
   OS_LEFT.writeMicroseconds(OS_POS_OPEN_LEFT);
   WS_RIGHT.writeMicroseconds(ws_pos_ext_right);
@@ -103,39 +128,48 @@ void setup() {
   ws_pos_right = ws_pos_ext_right;
   ws_pos_left = ws_pos_ext_left; 
 
-  // attach buildin LED as status LED
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, LOW);
 
-  /*
-  // Configuration of Force-Sensors
-  FORCE_RIGHT.begin(FORCE_RIGHT_DOUT_PIN, FORCE_RIGHT_SCK_PIN);
-  FORCE_RIGHT.is_ready();
-  FORCE_LEFT.begin(FORCE_LEFT_DOUT_PIN, FORCE_LEFT_SCK_PIN);
-  FORCE_LEFT.is_ready();
-  ledDelayBlink(2000, 10);                                                                 // warmup time for strain gauges with blinking indator led - delay 2000 milliseconds with 10 blinks                                                         
-  FORCE_RIGHT.set_scale();
-  FORCE_RIGHT.tare();
-  FORCE_RIGHT.get_units(10);
-  FORCE_RIGHT.set_scale();
-  FORCE_LEFT.set_scale();
-  FORCE_LEFT.tare();
-  FORCE_LEFT.get_units(10);
-  FORCE_LEFT.set_scale();
-  ledDelayBlink(1000, 5);
 
-  //average of force is value 
-  force_prev_value_left = FORCE_LEFT.read_average(20);
-  force_prev_value_right = FORCE_RIGHT.read_average(20);
-  force_prev_value_avg = (force_prev_value_left/1000 + force_prev_value_right/100)/2;
-  ledDelayBlink(500, 20);
-  */   
+  //LOADCELLS:
+  ledDelayBlink(2000, 2);
+  // calibration value for each loadcell - if loadcells delivers wrong measurements: recalibrate with program "Loadcell_calibration"
+  float calibrationValue_right = 696.0;
+  float calibrationValue_left = 733.0;
+  
+  // loadcell startup
+  long stabilizingtime = 2000; // tare preciscion can be improved by adding a few seconds of stabilizing time
+  boolean _tare = true; //set this to false if you don't want tare to be performed in the next step
+  byte loadcell_right_rdy = false;
+  byte loadcell_left_rdy = false;
+  LOADCELL_RIGHT.begin();
+  LOADCELL_LEFT.begin();
+  while (!(loadcell_left_rdy && loadcell_right_rdy)) { //run startup, stabilization and tare, both modules simultaniously
+    if (!loadcell_right_rdy) loadcell_right_rdy = LOADCELL_RIGHT.startMultiple(stabilizingtime, _tare);
+    if (!loadcell_left_rdy) loadcell_left_rdy = LOADCELL_LEFT.startMultiple(stabilizingtime, _tare);
+  }
+  if (LOADCELL_RIGHT.getTareTimeoutFlag()|| LOADCELL_RIGHT.getSignalTimeoutFlag()) {              // error log
+    Serial.println("Timeout, check MCU>HX711 right wiring and pin designations");
+    while(true);
+  } 
+  if (LOADCELL_LEFT.getTareTimeoutFlag()|| LOADCELL_LEFT.getSignalTimeoutFlag()) {                // error log
+    Serial.println("Timeout, check MCU>HX711 left wiring and pin designations");
+    while(true);
+  }
+  LOADCELL_RIGHT.setCalFactor(calibrationValue_right); // user set calibration value (float)
+  LOADCELL_LEFT.setCalFactor(calibrationValue_left); // user set calibration value (float)
+
+  // DONE
+  Serial.println("Startup is complete");
+  ledDelayBlink(5000, 10);
 }
-
-//*** Main Loop*** 
+ 
 void loop() {
-  // Communication with Web-Server
+  /*
+   * Main loop with communication with web-server, loadcell measurements and state machine. 
+   */
+  // communication with web-server
   recvOneChar();
+  // state machine
   if  (Program == 1) {
     openOS();
   } 
@@ -151,14 +185,8 @@ void loop() {
   else if (Program == 4) {
     configuredWS();
   }
-  /*
-  // THIS HERE IS JUST FOR TESTING AND CAUSES EXTREM JITTER IN ALL SERVOS --> Trying out other HX711 library next to fix jitter
-  force_prev_value_left = FORCE_LEFT.read();
-  force_prev_value_right = FORCE_RIGHT.read();
-  Serial.print(force_prev_value_left);
-  Serial.print(" ");
-  Serial.println(force_prev_value_right);
-  */
+  // read loacells
+  measure();
 }
    
 
@@ -171,8 +199,12 @@ void recvOneChar() {
   }
 }
 
-
-// *** PROGRAMS ***
+/*
+ * **********************************************************************************************************
+ * *************************************  STATE MACHINE FUNCTIONS  ******************************************
+ * **********************************************************************************************************
+ */
+ 
 void openOS() {  
   // postioning of ws servos
   WS_RIGHT.writeMicroseconds(ws_pos_ext_right);
@@ -222,24 +254,22 @@ void configuredWS() {
   }   
 }
 
-
+ /*
 void adaptiveWS() {
-  /*
-   * OLD FUNCTION THAZ DOES NOT WORK PROPERLY WITH NEW HARDWARE -- IGNORE
-   */
+ 
   // postioning of os servos
   OS_RIGHT.writeMicroseconds(OS_POS_CLOSED_RIGHT);
   OS_LEFT.writeMicroseconds(OS_POS_CLOSED_LEFT); 
   
-  // read force values
-  force_value_left = FORCE_LEFT.read(); 
-  force_value_right = FORCE_RIGHT.read();
+  // read loadcell values
+  loadcell_value_left = LOADCELL_LEFT.read(); 
+  loadcell_value_right = LOADCELL_RIGHT.read();
 
   //Berechnen des gleitenden Durchnschnitts (Mit Offset)
-  force_value_avg = (force_value_left/1000 + force_value_right/100)/2;
+  loadcell_value_avg = (loadcell_value_left/1000 + loadcell_value_right/100)/2;
 
   //Aktueller Durchnitt größer als der davor gemessene
-  if (force_value_avg > force_prev_value_avg) { 
+  if (loadcell_value_avg > loadcell_prev_value_avg) { 
     //Positionierung der ÖS-Motoren WARUM?
     //OS_RIGHT.writeMicroseconds(OS_POS_CLOSED_RIGHT);
     //OS_LEFT.writeMicroseconds(OS_POS_CLOSED_LEFT);
@@ -252,14 +282,14 @@ void adaptiveWS() {
     WS_LEFT.writeMicroseconds(ws_pos_left);
 
     //Überschreiben des gleitenden Durchschnitts
-    force_prev_value_avg = force_value_avg;
+    loadcell_prev_value_avg = loadcell_value_avg;
 
-    //Wartezeit, bis der nächste FORCE-Wert verfügbar wird    
+    //Wartezeit, bis der nächste LOADCELL-Wert verfügbar wird    
     delay(100);
   }
 
   //Aktueller Durchnitt kleiner als der davor gemessene
-  else if (force_value_avg < force_prev_value_avg) { 
+  else if (loadcell_value_avg < loadcell_prev_value_avg) { 
 
     //Positionierung der ÖS-Motoren
     OS_RIGHT.writeMicroseconds(OS_POS_CLOSED_RIGHT);
@@ -274,14 +304,14 @@ void adaptiveWS() {
     WS_LEFT.writeMicroseconds(ws_pos_left);
      
     //Überschreiben des gleitenden Durchschnitts
-    force_prev_value_avg = force_value_avg;
+    loadcell_prev_value_avg = loadcell_value_avg;
 
-    //Wartezeit, bis der nächste FORCE-Wert verfügbar wird WARUM
+    //Wartezeit, bis der nächste LOADCELL-Wert verfügbar wird WARUM
     delay(100);
   }
   
   //Aktueller Durchnitt gleich dem davor gemessenen
-  else if (force_value_avg == force_prev_value_avg) { 
+  else if (loadcell_value_avg == loadcell_prev_value_avg) { 
 
     //Positionierung der ÖS-Motoren
     OS_RIGHT.writeMicroseconds(OS_POS_CLOSED_RIGHT);
@@ -296,11 +326,55 @@ void adaptiveWS() {
     WS_LEFT.writeMicroseconds(ws_pos_left);
 
     //Überschreiben des gleitenden Durchschnitts
-    force_prev_value_avg = force_value_avg;
+    loadcell_prev_value_avg = loadcell_value_avg;
 
-    //Wartezeit, bis der nächste FORCE-Wert verfügbar wird    
+    //Wartezeit, bis der nächste LOADCELL-Wert verfügbar wird    
     delay(100);
+    
   }
+}
+*/
+
+void measure() {
+  long t;
+  static boolean newDataReady = 0;
+  const int serialPrintInterval = 0; //increase value to slow down serial print activity
+
+  // check for new data/start next conversion:
+  if (LOADCELL_RIGHT.update()) newDataReady = true;
+  LOADCELL_LEFT.update();
+
+  //get smoothed value from data set
+  if ((newDataReady)) {
+    if (millis() > t + serialPrintInterval) {
+      float a = LOADCELL_RIGHT.getData();
+      float b = LOADCELL_LEFT.getData();
+      Serial.print(a);
+      Serial.print("  ");
+      Serial.println(b);
+      newDataReady = 0;
+      t = millis();
+    }
+  }
+
+  /*
+  // receive command from serial terminal, send 't' to initiate tare operation:
+  if (Serial.available() > 0) {
+    float i;
+    char inByte = Serial.read();
+    if (inByte == 't') {
+      LOADCELL_RIGHT.tareNoDelay();
+      LOADCELL_LEFT.tareNoDelay();
+    }
+  }
+  //check if last tare operation is complete
+  if (LOADCELL_RIGHT.getTareStatus() == true) {
+    Serial.println("Tare loadcell 1 complete");
+  }
+  if (LOADCELL_LEFT.getTareStatus() == true) {
+    Serial.println("Tare loadcell 2 complete");
+  }
+  */
 }
 
 void ledDelayBlink(int delay_time, int blink_times){
