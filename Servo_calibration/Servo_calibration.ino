@@ -4,6 +4,28 @@
  * Controlling multipe servos using w,s and q on the keyboard of your pc via serial communication with PuTTY or any other serial terminal. Print position on serial monitor.
  */
 
+
+/*
+ * Callibration:
+ * Following values describe the opening and closing positions of the servos (PWM signal).
+ * The sketch "Servo_callibration" was used to figure those values.
+ * Perspective is mover to foil:
+ * OS_LEFT (OS Left)
+ *  open 1020
+ *  closed 1620
+ * OS_RIGHT (OS Right)
+ *  open 1700
+ *  closed 1094
+ * WS_LEFT (WS Left)
+ *  extended 2260
+ *  pull 1200
+ * WS_RIGHT (WS Right)
+ *  extended 985
+ *  pull 2104
+ *  
+ *  Those are set as postions and a motion range is set (f.e. OS_MOTION_RANGE = 1700 - 1094). This way both servos have to move the same amount.
+ */
+ 
 #include <Servo.h>  
 
 const String SERVO_NAMES[] = {"OS_LEFT", "OS_RIGHT", "WS_LEFT", "WS_RIGHT"};
