@@ -1,11 +1,11 @@
-/*******************************************************
+/************************************************************************************************************
  * This program is the main program for thebachelor thesis Kontibat mechatronic gripper.
  * Author: Florian Geissler
  */
  
 // Libraries
 #include <HX711_ADC.h>
-#include <Servo.h>    
+#include <ServoEasing.h>   
 
 /*
  * **********************************************************************************************************
@@ -17,16 +17,16 @@
 #define PI 3.1415926535897932384626433832795        
               
 // Timing Vars
-int mister_t; //Iterator in Motorcontroll Loops KANN WEG ???
-const int SERVO_TIMEOUT = 3; //Step in Motorcontroll Loops
+unsigned long prevMillis;
 
 // Program (Mode)
 int Program = 1;
+
 // Force-Sensor Pinout
 const byte LOADCELL_RIGHT_DOUT_PIN = 3;
 const byte LOADCELL_RIGHT_SCK_PIN = 4;
-const byte LOADCELL_LEFT_DOUT_PIN = 12; 
-const byte LOADCELL_LEFT_SCK_PIN = 11;
+const byte LOADCELL_LEFT_DOUT_PIN = 11; 
+const byte LOADCELL_LEFT_SCK_PIN = 12;
 
 // Loadcell HX711 Constructor (dout pin, sck pin)
 HX711_ADC LOADCELL_RIGHT(LOADCELL_RIGHT_DOUT_PIN, LOADCELL_RIGHT_SCK_PIN);
@@ -47,10 +47,10 @@ const byte WS_RIGHT_PIN = 9;
 const byte WS_LEFT_PIN = 10;
 
 // Servos
-Servo OS_RIGHT;                      
-Servo OS_LEFT;                      
-Servo WS_RIGHT;                  
-Servo WS_LEFT; 
+ServoEasing OS_RIGHT;                      
+ServoEasing OS_LEFT;                      
+ServoEasing WS_RIGHT;                  
+ServoEasing WS_LEFT; 
 
 /*
  * Callibration:
@@ -67,108 +67,139 @@ Servo WS_LEFT;
  *  extended 2260
  *  pull 1200
  * WS_RIGHT (WS Right)
- *  extended 0
- *  pull 1505
+ *  extended 985
+ *  pull 2104
  *  
  *  Those are set as postions and a motion range is set (f.e. OS_MOTION_RANGE = 1700 - 1094). This way both servos have to move the same amount.
  */
 
 // OS Servo Callibration
-int OS_MOTION_RANGE = 605;                                                // same for both servos
-int os_pos_right;                                                         // tracks is position
-int OS_POS_OPEN_RIGHT = 1700;                                             // callibration postition
-int OS_POS_CLOSED_RIGHT = OS_POS_OPEN_RIGHT-OS_MOTION_RANGE;              // callibration postition
-int os_pos_left;                                                          // tracks is position
-int OS_POS_OPEN_LEFT = 1020;                                              // callibration postition
-int OS_POS_CLOSED_LEFT = OS_POS_OPEN_LEFT + OS_MOTION_RANGE;              // not in use, just as explaination
-
+int os_pos_right;                                                         // tracks is position, not necessary
+const int OS_POS_OPEN_RIGHT = 1700;                                             
+const int OS_POS_CLOSED_RIGHT = 1094;                                         
+int os_pos_left;                                                          // tracks is position, not necessary
+const int OS_POS_OPEN_LEFT = 1020;                                           
+const int OS_POS_CLOSED_LEFT = 1620;                                            
 
 // WS Servo Callibration
-int WS_MOTION_RANGE = 1060; //Werte des PWM Signal mit dem Sketch Servo_Callibration ermittelt
-int ws_pos_right; 
-int ws_pos_ext_right = 445;
-int ws_pos_left; 
-int ws_pos_ext_left = 2200;
-int WS_STEP = 18; 
+int ws_pos_right;
+const int WS_POS_EXT_RIGHT = 985;
+const int WS_POS_PULL_RIGHT = 2104; 
+int ws_pos_left;
+const int WS_POS_EXT_LEFT = 2260;
+const int WS_POS_PULL_LEFT = 1200; 
 
 /*
  * **********************************************************************************************************
  * ********************************************  FUNCTIONS  *************************************************
  * **********************************************************************************************************
  */
- 
+
 void setup() {
   /*
    * Setup Program - just runs once on startup. Initializes servos and loadcells and sets start vars.
    * Status is displayed through buildin LED.
    */
-  // baudrate (communication speed) of serial port (:= 57,6 kbps)
-  Serial.begin(57600);   
+
+  /* *************************************************************
+   * ************************** GENERAL: *************************
+   * *************************************************************/
+   
+  Serial.begin(57600);     // baudrate (communication speed) of serial port (:= 57,6 kbps) 
   delay(10);
   
-  // attach buildin LED as status LED
+  /* **************************************************************
+   * ************************** LED: ******************************
+   * **************************************************************/
+   
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
 
-  // SERVOS:
-  ledDelayBlink(1000, 1);
-  // configuration of servos
-  OS_RIGHT.attach(OS_RIGHT_PIN);
-  OS_LEFT.attach(OS_LEFT_PIN);
-  WS_RIGHT.attach(WS_RIGHT_PIN);
-  WS_LEFT.attach(WS_LEFT_PIN);
+  /* **************************************************************
+   * ************************* SERVOS: ****************************
+   * **************************************************************/
+   
+  ledDelayBlink(1000, 1); // setup routine step indicator
   
-  // move servos in starting position and save position
-  OS_RIGHT.writeMicroseconds(OS_POS_OPEN_RIGHT);
-  OS_LEFT.writeMicroseconds(OS_POS_OPEN_LEFT);
-  WS_RIGHT.writeMicroseconds(ws_pos_ext_right);
-  WS_LEFT.writeMicroseconds(ws_pos_ext_left);
+  // configuration of servos
+  if (OS_RIGHT.attach(OS_RIGHT_PIN) == INVALID_SERVO) {
+    Serial.println(F("Error attaching servo OS_RIGHT"));
+  }
+  if (OS_LEFT.attach(OS_LEFT_PIN) == INVALID_SERVO) {
+    Serial.println(F("Error attaching servo OS_RIGHT"));
+  }
+  if (WS_RIGHT.attach(WS_RIGHT_PIN) == INVALID_SERVO) {
+    Serial.println(F("Error attaching servo WS_RIGHT"));
+  }
+  if (WS_LEFT.attach(WS_LEFT_PIN) == INVALID_SERVO) {
+    Serial.println(F("Error attaching servo WS_LEFT"));
+  }
+
+  OS_RIGHT.setEasingType(EASE_CUBIC_OUT); // position curve type
+  OS_LEFT.setEasingType(EASE_CUBIC_OUT);  // position curve type
+  
+  // move servos to starting position and save position
+  OS_RIGHT.write(OS_POS_OPEN_RIGHT);
+  OS_LEFT.write(OS_POS_OPEN_LEFT);
+  WS_RIGHT.write(WS_POS_EXT_RIGHT);
+  WS_LEFT.write(WS_POS_EXT_LEFT);
+  
   os_pos_right = OS_POS_OPEN_RIGHT;
   os_pos_left = OS_POS_OPEN_LEFT;
-  ws_pos_right = ws_pos_ext_right;
-  ws_pos_left = ws_pos_ext_left; 
+  ws_pos_right = WS_POS_EXT_RIGHT;
+  ws_pos_left = WS_POS_EXT_LEFT;
+  delay(500); // time to move and stabilize
 
+  /* **************************************************************
+   * *********************** LOADCELLS: ***************************
+   * **************************************************************/
+   
+  ledDelayBlink(2000, 2); // setup routine step indicator
 
-
-  //LOADCELLS:
-  ledDelayBlink(2000, 2);
-  // calibration value for each loadcell - if loadcells delivers wrong measurements: recalibrate with program "Loadcell_calibration"
-  float calibrationValue_right = 696.0;
-  float calibrationValue_left = 733.0;
-  
-  // loadcell startup
+  // loadcell setup vars
+  // calibration value for each loadcell - if loadcells delivers wrong measurements: recalibrate with dedicated program "Loadcell_calibration"
+  float calibrationValue_right = 1985.14;
+  float calibrationValue_left = 1948.98;
   long stabilizingtime = 2000; // tare preciscion can be improved by adding a few seconds of stabilizing time
-  boolean _tare = true; //set this to false if you don't want tare to be performed in the next step
+  boolean _tare = true; // set this to false if you don't want tare to be performed in the next step
+    
+  // loadcell startup
   byte loadcell_right_rdy = false;
   byte loadcell_left_rdy = false;
   LOADCELL_RIGHT.begin();
   LOADCELL_LEFT.begin();
-  while (!(loadcell_left_rdy && loadcell_right_rdy)) { //run startup, stabilization and tare, both modules simultaniously
+  // run startup, stabilization and tare, both modules simultaniously
+  while (!(loadcell_left_rdy && loadcell_right_rdy)) {
     if (!loadcell_right_rdy) loadcell_right_rdy = LOADCELL_RIGHT.startMultiple(stabilizingtime, _tare);
     if (!loadcell_left_rdy) loadcell_left_rdy = LOADCELL_LEFT.startMultiple(stabilizingtime, _tare);
   }
-  if (LOADCELL_RIGHT.getTareTimeoutFlag()|| LOADCELL_RIGHT.getSignalTimeoutFlag()) {              // error log
+  if (LOADCELL_RIGHT.getTareTimeoutFlag()|| LOADCELL_RIGHT.getSignalTimeoutFlag()) {             
     Serial.println("Timeout, check MCU>HX711 right wiring and pin designations");
     while(true);
   } 
-  if (LOADCELL_LEFT.getTareTimeoutFlag()|| LOADCELL_LEFT.getSignalTimeoutFlag()) {                // error log
+  if (LOADCELL_LEFT.getTareTimeoutFlag()|| LOADCELL_LEFT.getSignalTimeoutFlag()) {               
     Serial.println("Timeout, check MCU>HX711 left wiring and pin designations");
     while(true);
   }
-  LOADCELL_RIGHT.setCalFactor(calibrationValue_right); // user set calibration value (float)
-  LOADCELL_LEFT.setCalFactor(calibrationValue_left); // user set calibration value (float)
+  LOADCELL_RIGHT.setCalFactor(calibrationValue_right);
+  LOADCELL_LEFT.setCalFactor(calibrationValue_left);
 
-  // DONE
+  /* **************************************************************
+   * ********************** SETUP DONE: ***************************
+   * **************************************************************/
+   
+  ledDelayBlink(3000, 3); // setup routine step indicator
   Serial.println("Startup is complete");
-  ledDelayBlink(5000, 10);
+
 }
  
 void loop() {
   /*
    * Main loop with communication with web-server, loadcell measurements and state machine. 
    */
-  // communication with web-server
-  recvOneChar();
+   
+  recvOneChar();  // communication with web-server
+
   // state machine
   if  (Program == 1) {
     openOS();
@@ -185,8 +216,18 @@ void loop() {
   else if (Program == 4) {
     configuredWS();
   }
-  // read loacells
-  measure();
+
+  /*
+  if (millis()-prevMillis > 3000){
+    openOS();
+  }
+  if (millis()-prevMillis > 6000){
+    closeOS();
+    prevMillis = millis();
+  }
+  */
+
+  measure();   // read loacells
 }
    
 
@@ -199,6 +240,33 @@ void recvOneChar() {
   }
 }
 
+void ledDelayBlink(int delay_time, int blink_times){
+  for (int i = 0; i < blink_times; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(delay_time/(blink_times*2));
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(delay_time/(blink_times*2));
+  }         
+}
+
+void measure() {
+  static boolean newDataReady = 0;
+
+  // check for new data/start next conversion:
+  if (LOADCELL_RIGHT.update()) newDataReady = true;
+  LOADCELL_LEFT.update();
+
+  //get smoothed value from data set
+  if ((newDataReady)) {
+    float a = LOADCELL_RIGHT.getData();
+    float b = LOADCELL_LEFT.getData();
+    Serial.print(a);
+    Serial.print("  ");
+    Serial.println(b);
+    newDataReady = 0;
+  }
+}
+
 /*
  * **********************************************************************************************************
  * *************************************  STATE MACHINE FUNCTIONS  ******************************************
@@ -206,52 +274,50 @@ void recvOneChar() {
  */
  
 void openOS() {  
-  // postioning of ws servos
-  WS_RIGHT.writeMicroseconds(ws_pos_ext_right);
-  WS_LEFT.writeMicroseconds(ws_pos_ext_left);
-  
-  // positioning of os servos following a sine accelaration curve
-  if ( os_pos_right == OS_POS_CLOSED_RIGHT && os_pos_left == OS_POS_CLOSED_LEFT) {
-    for (mister_t = 0; mister_t <= 81; mister_t = mister_t + SERVO_TIMEOUT){
-        os_pos_right = OS_POS_CLOSED_RIGHT + (OS_MOTION_RANGE * sin((PI/162) * mister_t)); 
-        os_pos_left = OS_POS_CLOSED_LEFT -(OS_MOTION_RANGE * sin((PI/162) * mister_t)); 
-        OS_RIGHT.writeMicroseconds(os_pos_right);                                     
-        OS_LEFT.writeMicroseconds(os_pos_left); 
-        delay(SERVO_TIMEOUT);  
-    }
-  } 
-}  
+  /*
+   * Tests necessary: What is the fastest speed the servos can follow?
+   */
+
+  if ( os_pos_right != OS_POS_OPEN_RIGHT || os_pos_left != OS_POS_OPEN_LEFT) { 
+      OS_RIGHT.setEaseToD(OS_POS_OPEN_RIGHT, 1000); // (postion, time to get there) 
+      OS_LEFT.setEaseToD(OS_POS_OPEN_LEFT, 1000); // (postion, time to get there) 
+      synchronizeAllServosStartAndWaitForAllServosToStop(); // moves in blocking mode
+      
+      os_pos_right = OS_POS_OPEN_RIGHT; // set position, might unnecessary with new library
+      os_pos_left = OS_POS_OPEN_LEFT;
+  }
+}   
 
 void closeOS() {
-  // postioning of ws servos
-  WS_RIGHT.writeMicroseconds(ws_pos_ext_right);
-  WS_LEFT.writeMicroseconds(ws_pos_ext_left);
+  /*
+   * Tests necessary: What is the fastest speed the servos can follow?
+   */
 
-  // positioning of os servos following a sine accelaration curve
-  if ( os_pos_right == OS_POS_OPEN_RIGHT && os_pos_left == OS_POS_OPEN_LEFT){
-    for (mister_t = 0; mister_t <= 81; mister_t = mister_t + 3){
-        os_pos_right = OS_POS_OPEN_RIGHT -(OS_MOTION_RANGE * sin((PI/162) * mister_t));
-        os_pos_left = OS_POS_OPEN_LEFT + (OS_MOTION_RANGE * sin((PI/162) * mister_t));        
-        OS_RIGHT.writeMicroseconds(os_pos_right);
-        OS_LEFT.writeMicroseconds(os_pos_left);
-        delay(SERVO_TIMEOUT);
-    }
+  if ( os_pos_right != OS_POS_CLOSED_RIGHT || os_pos_left != OS_POS_CLOSED_LEFT) { 
+      OS_RIGHT.setEaseToD(OS_POS_CLOSED_RIGHT, 1000); // (postion, time to get there) 
+      OS_LEFT.setEaseToD(OS_POS_CLOSED_LEFT, 1000); // (postion, time to get there) 
+      synchronizeAllServosStartAndWaitForAllServosToStop(); // moves in blocking mode
+      
+      os_pos_right = OS_POS_CLOSED_RIGHT; // set position, might unnecessary with new library
+      os_pos_left = OS_POS_CLOSED_LEFT;
   }
 }
 
 void configuredWS() {
+  
   // postioning of os servos
-  OS_RIGHT.writeMicroseconds(OS_POS_CLOSED_RIGHT);
-  OS_LEFT.writeMicroseconds(OS_POS_CLOSED_LEFT);
-
+  closeOS();
+  
   // positioning of ws servos following a sine accelaration curve
-  for (mister_t = 0; mister_t <= 144; mister_t = mister_t + 3){
-      ws_pos_right = (int) (ws_pos_ext_right + (WS_MOTION_RANGE * sin((PI/144) * mister_t)));
-      ws_pos_left = (int) (ws_pos_ext_left - (WS_MOTION_RANGE * sin((PI/144) * mister_t))); 
-      WS_RIGHT.writeMicroseconds(ws_pos_right);      
-      WS_LEFT.writeMicroseconds(ws_pos_left);
-      delay(SERVO_TIMEOUT);
-  }   
+      WS_RIGHT.setEasingType(EASE_SINE_IN_OUT); // position curve type
+      WS_LEFT.setEasingType(EASE_SINE_IN_OUT);  // position curve type
+      
+      WS_RIGHT.setEaseToD(WS_POS_PULL_RIGHT,1000);      
+      WS_LEFT.setEaseToD(WS_POS_PULL_LEFT,1000);
+      synchronizeAllServosStartAndWaitForAllServosToStop();
+      WS_RIGHT.setEaseToD(WS_POS_EXT_RIGHT,1000);      
+      WS_LEFT.setEaseToD(WS_POS_EXT_LEFT,1000);
+      synchronizeAllServosStartAndWaitForAllServosToStop();   
 }
 
  /*
@@ -335,27 +401,6 @@ void adaptiveWS() {
 }
 */
 
-void measure() {
-  long t;
-  static boolean newDataReady = 0;
-  const int serialPrintInterval = 0; //increase value to slow down serial print activity
-
-  // check for new data/start next conversion:
-  if (LOADCELL_RIGHT.update()) newDataReady = true;
-  LOADCELL_LEFT.update();
-
-  //get smoothed value from data set
-  if ((newDataReady)) {
-    if (millis() > t + serialPrintInterval) {
-      float a = LOADCELL_RIGHT.getData();
-      float b = LOADCELL_LEFT.getData();
-      Serial.print(a);
-      Serial.print("  ");
-      Serial.println(b);
-      newDataReady = 0;
-      t = millis();
-    }
-  }
 
   /*
   // receive command from serial terminal, send 't' to initiate tare operation:
@@ -374,14 +419,6 @@ void measure() {
   if (LOADCELL_LEFT.getTareStatus() == true) {
     Serial.println("Tare loadcell 2 complete");
   }
-  */
-}
 
-void ledDelayBlink(int delay_time, int blink_times){
-  for (int i = 0; i < blink_times; i++) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(delay_time/(blink_times*2));
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(delay_time/(blink_times*2));
-  }         
 }
+  */
