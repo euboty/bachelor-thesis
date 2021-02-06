@@ -10,9 +10,10 @@
  * **********************************************************************************************************
 */
 
-#include <HX711_ADC.h>
-#include <ServoEasing.h>
-#include <PID_v1.h>
+#include <HX711_ADC.h>    //https://github.com/olkal/HX711_ADC
+#include <ServoEasing.h>    //https://github.com/ArminJo/ServoEasing
+#include <PID_v1.h>     //https://github.com/br3ttb/Arduino-PID-Library
+#include <Wire.h>
 
 /*
  * **********************************************************************************************************
@@ -20,8 +21,11 @@
  * **********************************************************************************************************
 */
 
-// Program (Mode)
-int Program = 1;  // initial program, change by webserver later on
+// Program Mode
+byte mode_ = 0;
+
+// Failure Alert
+bool setup_failure = 0;
 
 // Endswitch Pinout
 const byte ENDSWITCH_RIGHT = 7;
@@ -42,9 +46,9 @@ HX711_ADC Loadcell_Right(LOADCELL_RIGHT_DOUT_PIN, LOADCELL_RIGHT_SCK_PIN);
 HX711_ADC Loadcell_Left(LOADCELL_LEFT_DOUT_PIN, LOADCELL_LEFT_SCK_PIN);
 
 // Loadcell Setup Vars
-// calibration value for each loadcell - if loadcells delivers wrong measurements: recalibrate with dedicated program "Loadcell_calibration" in Code folder
+// calibration value for each loadcell - if loadcells deliver wrong measurements: recalibrate with dedicated program "Loadcell_calibration" in Code folder
 const float LOADCELL_CAL_RIGHT = 1985.14;
-float calibrationValue_left = 1948.98;
+const float LOADCELL_CAL_LEFT = 1948.98;
 long stabilizingtime = 2000; // setup tare preciscion can be improved by adding a few seconds of stabilizing time
 boolean _tare = true; // set this to false if you don't want tare to be performed in setup
 
@@ -102,11 +106,16 @@ int ws_pos_left;
 const int WS_POS_EXT_LEFT = 2260;
 //const int WS_POS_PULL_LEFT = 1220;
 const int WS_MOTION_RANGE = 1040;
+unsigned int position_ws;   // demanded ws position given by PLC
 
 // PID
-double Setpoint, Output;
+double loadcell_target, pid_output_ws;
+double max_influence_controller;  // in percent of ws motion range for semi adaptive program
 double Kp = 3, Ki = 22, Kd = 2; // those parameters are just examples and not tuned yet
-PID Ws_PID(&loadcell_value_mean, &Output, &Setpoint, Kp, Ki, Kd, DIRECT); // Input, Output, Setpoint
+PID Ws_PID(&loadcell_value_mean, &pid_output_ws, &loadcell_target, Kp, Ki, Kd, DIRECT); // Input, Output, Setpoint, Kp, Ki, Kd
+
+//I2C
+byte payload [2];
 
 /*
  * **********************************************************************************************************
@@ -140,7 +149,7 @@ void setup() {
 
   pinMode(ENDSWITCH_LEFT, INPUT_PULLUP);
   pinMode(ENDSWITCH_RIGHT, INPUT_PULLUP);
-  
+
   /* **************************************************************
    * ************************* SERVOS: ****************************
    * **************************************************************/
@@ -150,15 +159,19 @@ void setup() {
   // configuration of servos
   if (Os_Right.attach(OS_RIGHT_PIN) == INVALID_SERVO) {
     Serial.println(F("Error attaching servo Os_Right"));
+    setup_failure = true;
   }
   if (Os_Left.attach(OS_LEFT_PIN) == INVALID_SERVO) {
     Serial.println(F("Error attaching servo Os_Right"));
+    setup_failure = true;
   }
   if (Ws_Right.attach(WS_RIGHT_PIN) == INVALID_SERVO) {
     Serial.println(F("Error attaching servo Ws_Right"));
+    setup_failure = true;
   }
   if (Ws_Left.attach(WS_LEFT_PIN) == INVALID_SERVO) {
     Serial.println(F("Error attaching servo Ws_Left"));
+    setup_failure = true;
   }
 
   Os_Right.setEasingType(EASE_CUBIC_OUT); // position curve type
@@ -194,23 +207,32 @@ void setup() {
   }
   if (Loadcell_Right.getTareTimeoutFlag() || Loadcell_Right.getSignalTimeoutFlag()) {
     Serial.println("Timeout, check MCU>HX711 right wiring and pin designations");
+    setup_failure = true;
     while (true);
   }
   if (Loadcell_Left.getTareTimeoutFlag() || Loadcell_Left.getSignalTimeoutFlag()) {
     Serial.println("Timeout, check MCU>HX711 left wiring and pin designations");
+    setup_failure = true;
     while (true);
   }
   Loadcell_Right.setCalFactor(LOADCELL_CAL_RIGHT);
-  Loadcell_Left.setCalFactor(calibrationValue_left);
+  Loadcell_Left.setCalFactor(LOADCELL_CAL_LEFT);
 
   /* **************************************************************
    * ******************** PID Controller: *************************
    * **************************************************************/
 
-  Setpoint = 300; //target force of 3N
   //turn the PID on
   Ws_PID.SetMode(AUTOMATIC);
   Ws_PID.SetOutputLimits(0, WS_MOTION_RANGE);
+
+  /* **************************************************************
+   * ******************** I2C Communication: **********************
+   * **************************************************************/
+
+  Wire.begin(8);                // join i2c bus with address #8
+  Wire.onReceive(receiveEvent); // register event (interrupt)
+  Wire.onRequest(requestEvent); // register event (interrupt)
 
   /* **************************************************************
    * ********************** SETUP DONE: ***************************
@@ -231,28 +253,34 @@ void loop() {
   /*
      Main loop with communication with web-server, loadcell measurements and state machine.
   */
-
-  recvOneChar();  // communication with web-server
   getLoadcells();
   getEndswitches();
-  //serialPrintSensorsVals(); // only works if serial connection between Arduino Uno and Wemos is cut 
+  serialPrintSystemData();
+  serialPrintReceivedData();
 
   // state machine
-  if  (Program == 1) {
+  if (mode_ == 0) {
+    // do nothing rest state
+  }
+  else if (mode_ == 1) {
     openOS();
   }
-
-  if  (Program == 2) {
+  else if (mode_ == 2) {
     closeOS();
   }
-
-  else if (Program == 3) {
+  else if (mode_ == 3) {
+    semiAdaptiveWS();
+  }
+  else if (mode_ == 4) {
     adaptiveWS();
   }
-
-  else if (Program == 4) {
-    configuredWS();
+  else if (mode_ == 5) {
+    demoWS();
   }
+  else if (mode_ == 6) {
+    tare_();
+  }
+
 }
 
 /*
@@ -260,17 +288,6 @@ void loop() {
  * ****************************************  GENERAL FUNCTIONS  *********************************************
  * **********************************************************************************************************
 */
-
-void recvOneChar() {
-  /*
-     Communication with Wemos chip (webserver) over Serial.
-  */
-  char recievedChar;
-  if (Serial.available() > 0) {
-    recievedChar = Serial.read();
-    Program = recievedChar;
-  }
-}
 
 void ledDelayBlink(int delay_time, int blink_times) {
   /*
@@ -285,7 +302,7 @@ void ledDelayBlink(int delay_time, int blink_times) {
 }
 
 void getLoadcells() {
-  static boolean newDataReady = 0;
+  static boolean newDataReady = false;
 
   // check for new data/start next conversion:
   if (Loadcell_Right.update()) newDataReady = true;
@@ -305,36 +322,15 @@ void getLoadcells() {
   }
 }
 
-void getEndswitches(){
-  endswitch_right = !digitalRead(ENDSWITCH_RIGHT);  
-  endswitch_left = !digitalRead(ENDSWITCH_LEFT); // due to utilized internal pullup resistors switch read would be always high and low on press, thats why we negate
+void getEndswitches() {
+  endswitch_right = !digitalRead(ENDSWITCH_RIGHT);    // due to utilized internal pullup resistors switch read would be always high and low on press, thats why we negate
+  endswitch_left = !digitalRead(ENDSWITCH_LEFT);
 }
 
-void tare_() {
-  /*
-     FUNCTION NOT IN USE IN HTTP + SERIAL VERSION!
-     receive command from serial terminal, send 't' to initiate tare operation:
-  */
-  if (Serial.available() > 0) {
-    float i;
-    char inByte = Serial.read();
-    if (inByte == 't') {
-      Loadcell_Right.tareNoDelay();
-      Loadcell_Left.tareNoDelay();
-    }
-  }
-  //check if last tare operation is complete
-  while (Loadcell_Right.getTareStatus() == false) {
-    Serial.println("Taring");
-  }
-  while (Loadcell_Left.getTareStatus() == false) {
-    Serial.println("Taring...");
-  }
-}
-
-void serialPrintSensorsVals() {
-  
-  Serial.print("Loadcell Left: ");
+void serialPrintSystemData() {
+  Serial.print(" Setup Fehlermeldung: ");
+  Serial.print(setup_failure);
+  Serial.print(" Loadcell Left: ");
   Serial.print(loadcell_value_left);
   Serial.print(" Loadcell Right: ");
   Serial.print(loadcell_value_right);
@@ -343,10 +339,95 @@ void serialPrintSensorsVals() {
   Serial.print(" Endswitch Left: ");
   Serial.print(endswitch_left);
   Serial.print(" Endswitch Right: ");
-  Serial.println(endswitch_right);
-
+  Serial.print(endswitch_right);
 }
 
+void serialPrintReceivedData() {
+  Serial.print(" Mode: ");
+  Serial.print(mode_);
+  Serial.print(" Demanded Position Ws: ");
+  Serial.print(loadcell_target);
+  Serial.print(" Loadcell Target: ");
+  Serial.print(position_ws);
+  Serial.print(" Kp, Ki, Kd: ");
+  Serial.print(Kp);
+  Serial.print(", ");
+  Serial.print(Ki);
+  Serial.print(", ");
+  Serial.print(Kd);
+  Serial.print(" Max Influence Controller: ");
+  Serial.println(max_influence_controller);
+}
+
+/*
+ * **********************************************************************************************************
+ * ******************************************  I2C Connection ***********************************************
+ * **********************************************************************************************************
+*/
+
+void receiveEvent() {
+  /*
+     Function that executes whenever data is received from I2C master.
+     This function is registered as an event, see setup()
+  */
+  mode_ = Wire.read ();
+
+  byte buffer_[2];
+  buffer_[0] = Wire.read ();
+  buffer_[1] = Wire.read ();
+  short force_target_i2c = ((short)(buffer_[0]) << 8) + buffer_[1];
+  loadcell_target = (double)force_target_i2c / 9.81;  // Millinewton/ 9.81 = gramms
+
+  buffer_[0] = Wire.read ();
+  buffer_[1] = Wire.read ();
+  position_ws = ((short)(buffer_[0]) << 8) + buffer_[1];
+
+  buffer_[0] = Wire.read ();
+  buffer_[1] = Wire.read ();
+  short Kp_i2c = ((short)(buffer_[0]) << 8) + buffer_[1];
+  Kp = (double)Kp_i2c / 1000; // modbus and i2c sends ints we want floats, thats why we send int * 1000 in the first place
+
+  buffer_[0] = Wire.read ();
+  buffer_[1] = Wire.read ();
+  short Ki_i2c = ((short)(buffer_[0]) << 8) + buffer_[1];
+  Ki = (double)Ki_i2c / 1000;
+
+  buffer_[0] = Wire.read ();
+  buffer_[1] = Wire.read ();
+  short Kd_i2c = ((short)(buffer_[0]) << 8) + buffer_[1];
+  Kd = (double)Kd_i2c / 1000;
+
+  buffer_[0] = Wire.read ();
+  buffer_[1] = Wire.read ();
+  short max_influence_controller_i2c = ((short)(buffer_[0]) << 8) + buffer_[1];
+  max_influence_controller = max_influence_controller_i2c / 10; // controller influence in promille
+}
+
+void requestEvent() {
+  /*
+    Function that executes whenever data is requested from I2C master.
+    This function is registered as an event, see setup()
+  */
+  Wire.write(setup_failure);
+  Wire.write(endswitch_left);
+  Wire.write(endswitch_right); //this 3 values could be combined to one byte for further perfomance improvements
+
+  int force_left_real = int(loadcell_value_left * 10); // we wanna send e.g. 300.1g --> we make it 3001 and recast it to 300.1 in Twincat
+  int2bytes(force_left_real);
+  Wire.write (payload, 2);
+  int force_right_real = int(loadcell_value_right * 10); // we wanna send e.g. 300.1g --> we make it 3001 and recast it to 300.1 in Twincat
+  int2bytes(force_right_real);
+  Wire.write (payload, 2);
+}
+
+void int2bytes(int split_me) {
+  /*
+     For I2C Communication: Splits int into an array of bytes which is defined out of this function,
+     since C++ does not support return of arrays.
+  */
+  payload[0] = highByte(split_me);
+  payload[1] = lowByte(split_me);
+}
 /*
  * **********************************************************************************************************
  * *************************************  STATE MACHINE FUNCTIONS  ******************************************
@@ -383,7 +464,7 @@ void closeOS() {
   }
 }
 
-void configuredWS() {
+void demoWS() {
   closeOS();
   // positioning of ws servos following a sine accelaration curve for testing
   Ws_Right.setEasingType(EASE_SINE_IN_OUT); // position curve type
@@ -397,10 +478,30 @@ void configuredWS() {
   synchronizeAllServosStartAndWaitForAllServosToStop();
 }
 
-
 void adaptiveWS() {
   closeOS();
   Ws_PID.Compute();  //PID
-  Ws_Left.writeMicroseconds(WS_POS_EXT_RIGHT + Output);
-  Ws_Right.writeMicroseconds(WS_POS_EXT_LEFT - Output);
+  Ws_Left.writeMicroseconds(WS_POS_EXT_RIGHT + pid_output_ws);
+  Ws_Right.writeMicroseconds(WS_POS_EXT_LEFT - pid_output_ws);
+}
+
+void semiAdaptiveWS() {
+  // in progress
+}
+
+void tare_() {
+  /*
+     Tares both loadcells.
+  */
+
+  Loadcell_Right.tareNoDelay();
+  Loadcell_Left.tareNoDelay();
+
+  //check if last tare operation is complete
+  while (Loadcell_Right.getTareStatus() == false) {
+    Serial.println("Taring...");
+  }
+  while (Loadcell_Left.getTareStatus() == false) {
+    Serial.println("Taring...");
+  }
 }
