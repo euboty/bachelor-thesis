@@ -96,12 +96,12 @@ const int OS_POS_CLOSED_LEFT = 1620;
 
 // WS Servo Callibration
 int ws_pos_right;
-const int WS_POS_EXT_RIGHT = 985;
-//const int WS_POS_PULL_RIGHT = 2104;
+const int WS_POS_EXT_RIGHT = 960;
+//const int WS_POS_PULL_RIGHT = 2037;
 int ws_pos_left;
-const int WS_POS_EXT_LEFT = 2260;
-//const int WS_POS_PULL_LEFT = 1220;
-const int WS_MOTION_RANGE = 1040;
+const int WS_POS_EXT_LEFT = 1994;
+//const int WS_POS_PULL_LEFT = 959;
+const int WS_MOTION_RANGE = 1035;
 
 // PID
 double Setpoint, Output;

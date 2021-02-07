@@ -17,11 +17,11 @@
  *  open 1700
  *  closed 1094
  * WS_LEFT (WS Left)
- *  extended 2260
- *  pull 1200
+ *  extended 1994
+ *  pull 959
  * WS_RIGHT (WS Right)
- *  extended 985
- *  pull 2104
+ *  extended 960
+ *  pull 2037
  *  
  *  Those are set as postions and a motion range is set (f.e. OS_MOTION_RANGE = 1700 - 1094). This way both servos have to move the same amount.
  */
@@ -29,7 +29,7 @@
 #include <Servo.h>  
 
 const String SERVO_NAMES[] = {"OS_LEFT", "OS_RIGHT", "WS_LEFT", "WS_RIGHT"};
-const int SERVO_PINOUT[] = {5, 6, 10, 9};
+const int SERVO_PINOUT[] = {6, 5, 10, 9};
 const int ARRAY_LENGTH = 4;
 const int MAX_SERVO_RANGE[] = {4000, 4000, 4000, 4000};
 const int SERVO_STARTING_POS[] = {1300, 1300, 1300, 1300};                    // values for KontiBat Project, yours might be different
