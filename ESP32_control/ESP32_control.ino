@@ -1,6 +1,6 @@
 /************************************************************************************************************
    This program is the main program for the bachelor thesis Kontibat mechatronic gripper of Florian Geissler.
-   Version: Modbus I2C Version in Developement.
+   Version: ESP32 in Developement
    Author: Florian Geissler
 */
 
@@ -10,16 +10,19 @@
  * **********************************************************************************************************
 */
 
-#include <HX711_ADC.h>    //https://github.com/olkal/HX711_ADC
-#include <ServoEasing.h>    //https://github.com/ArminJo/ServoEasing
-#include <PID_v1.h>     //https://github.com/br3ttb/Arduino-PID-Library
-#include <Wire.h>
+#include <HX711_ADC.h>            //https://github.com/olkal/HX711_ADC
+#include <ServoEasing.h>          //https://github.com/ArminJo/ServoEasing
+#include <PID_v1.h>               //https://github.com/br3ttb/Arduino-PID-Library
+#include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager
+#include <ModbusIP_ESP8266.h>     //https://github.com/emelianov/modbus-esp8266
 
 /*
  * **********************************************************************************************************
  * *********************************************  GLOBAL ****************************************************
  * **********************************************************************************************************
 */
+
+const int LED_BUILTIN = 1;
 
 // Program Mode
 byte mode_ = 0;
@@ -122,8 +125,34 @@ double max_influence_controller;  // in percent of ws motion range for semi adap
 double Kp = 3, Ki = 22, Kd = 2; // those parameters are just examples and not tuned yet
 PID Ws_PID(&loadcell_value_mean, &pid_output_ws, &loadcell_target, Kp, Ki, Kd, DIRECT); // Input, Output, Setpoint, Kp, Ki, Kd
 
-//I2C
-byte payload [2];
+// WIFI
+WiFiManager wifiManager;
+
+// Modbus Registers Offsets
+
+// Coil (READ&WRITE)
+// none
+
+// Discrete Input (READ)
+const int SETUP_FAILURE_ISTS = 0;
+const int OS_ENDSWITCH_LEFT_ISTS = 1;
+const int OS_ENDSWITCH_RIGHT_ISTS = 2;
+
+// Holding Register (READ&WRITE)
+const int MODE_HREG = 0;
+const int FORCE_TARGET_HREG = 1;
+const int POSITION_WS_HREG = 2;
+const int P_HREG = 3;
+const int I_HREG = 4;
+const int D_HREG = 5;
+const int MAX_INFLUENCE_CONTROLLER_HREG = 6; // how much influence can the PID Controller take on WS position in %
+
+// Input Register (READ)
+const int FORCE_LEFT_REAL_IREG = 0;
+const int FORCE_RIGHT_REAL_IREG = 1;
+
+// Modbus object
+ModbusIP mb;
 
 /*
  * **********************************************************************************************************
@@ -143,6 +172,25 @@ void setup() {
 
   Serial.begin(57600);     // baudrate (communication speed) of serial port (:= 57,6 kbps)
   delay(10);
+
+  /* *************************************************************
+   * *************************** WIFI: ***************************
+   * *************************************************************/
+
+  Serial.println();
+  Serial.println();
+  Serial.println("Establishing wifi connection");
+  wifiManager.autoConnect("KontiBat_Greifer_WlanConfig");   //access @ 192.168.4.1
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  Serial.println("Connected!");
+  Serial.println();
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
 
   /* **************************************************************
    * ************************** LED: ******************************
@@ -235,12 +283,28 @@ void setup() {
   Ws_PID.SetSampleTime(1);
 
   /* **************************************************************
-   * ******************** I2C Communication: **********************
-   * **************************************************************/
+   * ************************ MODBUS: *****************************
+   * **************************************************************/  
 
-  Wire.begin(8);                // join i2c bus with address #8
-  Wire.onReceive(receiveEvent); // register event (interrupt)
-  Wire.onRequest(requestEvent); // register event (interrupt)
+  mb.server();  // start modbus server
+
+  // Discrete Input - bool - read only
+  mb.addIsts(SETUP_FAILURE_ISTS);
+  mb.addIsts(OS_ENDSWITCH_LEFT_ISTS);
+  mb.addIsts(OS_ENDSWITCH_RIGHT_ISTS);
+
+  // Holding Register - int - read and write
+  mb.addHreg(MODE_HREG);
+  mb.addHreg(FORCE_TARGET_HREG);
+  mb.addHreg(POSITION_WS_HREG);
+  mb.addHreg(P_HREG);
+  mb.addHreg(I_HREG);
+  mb.addHreg(D_HREG);
+  mb.addHreg(MAX_INFLUENCE_CONTROLLER_HREG);
+
+  // Input Register - int - read only
+  mb.addIreg(FORCE_LEFT_REAL_IREG);
+  mb.addIreg(FORCE_RIGHT_REAL_IREG);
 
   /* **************************************************************
    * ********************** SETUP DONE: ***************************
@@ -257,12 +321,19 @@ void setup() {
  * **********************************************************************************************************
 */
 
+/*
+ *   mb.Ists(SETUP_FAILURE, setup_failure);
+ *   mb.Hreg(MAX_INFLUENCE_CONTROLLER)
+ */
+
 void loop() {
   /*
      Main loop with communication with web-server, loadcell measurements and state machine.
   */
   getLoadcells();
   getEndswitches();
+
+  mb.task();  // call once inside loop - all modbus magic here
 
   // state machine
   if (mode_ == 0) {
@@ -514,74 +585,4 @@ void catchTimeBetweenMeasurements() {
   prev_millis = millis();
   Serial.print("Time between Loadcell Measurements: ");
   Serial.println(time_between_measurements);
-}
-
-/*
- * **********************************************************************************************************
- * ******************************************  I2C Connection ***********************************************
- * **********************************************************************************************************
-*/
-
-void receiveEvent() {
-  /*
-     Function that executes whenever data is received from I2C master.
-     This function is registered as an event, see setup()
-  */
-  mode_ = Wire.read ();
-
-  byte buffer_[2];
-  buffer_[0] = Wire.read ();
-  buffer_[1] = Wire.read ();
-  short force_target_i2c = ((short)(buffer_[0]) << 8) + buffer_[1];
-  loadcell_target = (double)force_target_i2c / 9.81;  // Millinewton/ 9.81 = gramms
-
-  buffer_[0] = Wire.read ();
-  buffer_[1] = Wire.read ();
-  position_ws = ((short)(buffer_[0]) << 8) + buffer_[1];
-
-  buffer_[0] = Wire.read ();
-  buffer_[1] = Wire.read ();
-  short Kp_i2c = ((short)(buffer_[0]) << 8) + buffer_[1];
-  Kp = (double)Kp_i2c / 1000; // modbus and i2c sends ints we want floats, thats why we send int * 1000 in the first place
-
-  buffer_[0] = Wire.read ();
-  buffer_[1] = Wire.read ();
-  short Ki_i2c = ((short)(buffer_[0]) << 8) + buffer_[1];
-  Ki = (double)Ki_i2c / 1000;
-
-  buffer_[0] = Wire.read ();
-  buffer_[1] = Wire.read ();
-  short Kd_i2c = ((short)(buffer_[0]) << 8) + buffer_[1];
-  Kd = (double)Kd_i2c / 1000;
-
-  buffer_[0] = Wire.read ();
-  buffer_[1] = Wire.read ();
-  short max_influence_controller_i2c = ((short)(buffer_[0]) << 8) + buffer_[1];
-  max_influence_controller = max_influence_controller_i2c / 10; // controller influence in promille
-}
-
-void requestEvent() {
-  /*
-    Function that executes whenever data is requested from I2C master.
-    This function is registered as an event, see setup()
-  */
-  Wire.write(setup_failure);
-  Wire.write(endswitch_left);
-  Wire.write(endswitch_right); //this 3 values could be combined to one byte for further perfomance improvements
-
-  int force_left_real = int(loadcell_value_left * 10); // we wanna send e.g. 300.1g --> we make it 3001 and recast it to 300.1 in Twincat
-  int2bytes(force_left_real);
-  Wire.write (payload, 2);
-  int force_right_real = int(loadcell_value_right * 10); // we wanna send e.g. 300.1g --> we make it 3001 and recast it to 300.1 in Twincat
-  int2bytes(force_right_real);
-  Wire.write (payload, 2);
-}
-
-void int2bytes(int split_me) {
-  /*
-     For I2C Communication: Splits int into an array of bytes which is defined out of this function,
-     since C++ does not support return of arrays.
-  */
-  payload[0] = highByte(split_me);
-  payload[1] = lowByte(split_me);
 }
