@@ -29,17 +29,17 @@
 #include <Servo.h>  
 
 const String SERVO_NAMES[] = {"OS_LEFT", "OS_RIGHT", "WS_LEFT", "WS_RIGHT"};
-const int SERVO_PINOUT[] = {5, 6, 10, 9};
+const int SERVO_PINOUT[] = {6, 5, 10, 9};
 const int ARRAY_LENGTH = 4;
-const int MAX_SERVO_RANGE[] = {4000, 4000, 4000, 4000};
-const int SERVO_STARTING_POS[] = {1300, 1300, 1300, 1300};                    // values for KontiBat Project, yours might be different
+const double MAX_SERVO_RANGE[] = {360, 360, 360, 360};
+const double SERVO_STARTING_POS[] = {0, 0, 0, 0};                    // values for KontiBat Project, yours might be different
 
 char servo_pointer_char;
 int servo_pointer;
 
 char servo_direction;
-int servo_pos[ARRAY_LENGTH];
-int servo_pos_prev[ARRAY_LENGTH];
+double servo_pos[ARRAY_LENGTH];
+double servo_pos_prev[ARRAY_LENGTH];
 
 
 
@@ -112,12 +112,12 @@ void calibrateServo(){
     servo_direction = Serial.read();
     if (servo_direction == 'w'){
       if (servo_pos[servo_pointer] < MAX_SERVO_RANGE[servo_pointer]){
-        servo_pos[servo_pointer] += 1;
+        servo_pos[servo_pointer] += 0.1;
       }  
     }
     else if (servo_direction == 's'){
       if (servo_pos[servo_pointer] > 0){
-        servo_pos[servo_pointer] -= 1;  
+        servo_pos[servo_pointer] -= 0.1;  
       }
     }
     else if (servo_direction == 'q'){
@@ -125,7 +125,7 @@ void calibrateServo(){
     }
     Serial.println(servo_pos[servo_pointer]);
     if (servo_pos[servo_pointer] != servo_pos_prev[servo_pointer]){
-      SERVO[servo_pointer].writeMicroseconds(servo_pos[servo_pointer]);
+      SERVO[servo_pointer].write(servo_pos[servo_pointer]);
       servo_pos_prev[servo_pointer] = servo_pos[servo_pointer];
     }
     delay(1);

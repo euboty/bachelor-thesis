@@ -1,6 +1,6 @@
 /************************************************************************************************************
    This program is the main program for the bachelor thesis Kontibat mechatronic gripper of Florian Geissler.
-   Version: Pre Final Http-Serial Version.
+   Version: Modbus I2C Version in Developement.
    Author: Florian Geissler
 */
 
@@ -74,23 +74,27 @@ ServoEasing Ws_Left;
    Following values describe the opening and closing positions of the servos (PWM signal).
    The sketch "Servo_callibration" was used to figure those values.
    Perspective is mover to foil:
+   //MICROSECONDS FOR OS CAUSE IT WORKS BETTER
    Os_Left (OS Left)
     open 1020
     closed 1620
    Os_Right (OS Right)
     open 1700
     closed 1094
+   //DEEGREES FOR WS
    Ws_Left (WS Left)
-    extended 2260
-    pull 1200
+    extended 135
+    pull 33
+    middle 86
    Ws_Right (WS Right)
-    extended 985
-    pull 2104
+    extended 43
+    pull 148
+    middle 88
 
     Those are set as postions and a motion range is set (f.e. OS_MOTION_RANGE = 1700 - 1094). This way both servos have to move the same amount.
 */
 
-// OS Servo Callibration
+// OS Servo Callibration - PWM Microseconds instead of degrees because it wors better with these servos
 int os_pos_right;                                                         // tracks is position in software
 const int OS_POS_OPEN_RIGHT = 1700;
 const int OS_POS_CLOSED_RIGHT = 1094;
@@ -98,15 +102,19 @@ int os_pos_left;                                                          // tra
 const int OS_POS_OPEN_LEFT = 1020;
 const int OS_POS_CLOSED_LEFT = 1620;
 
-// WS Servo Callibration
-int ws_pos_right;
-const int WS_POS_EXT_RIGHT = 985;
-//const int WS_POS_PULL_RIGHT = 2104;
-int ws_pos_left;
-const int WS_POS_EXT_LEFT = 2260;
-//const int WS_POS_PULL_LEFT = 1220;
-const int WS_MOTION_RANGE = 1040;
-unsigned int position_ws;   // demanded ws position given by PLC
+// WS Servo Callibration - Degrees
+double ws_pos_right;
+const double WS_POS_EXT_RIGHT = 41;
+const double WS_POS_MID_RIGHT = 88;
+//const double WS_POS_PULL_RIGHT = 148;
+double ws_pos_left;
+const double WS_POS_EXT_LEFT = 135;
+const double WS_POS_MID_LEFT = 86;
+//const double WS_POS_PULL_LEFT = 33;
+const double WS_MOTION_RANGE_2EXT = 48;
+const double WS_MOTION_RANGE_2PULL = 53;
+
+unsigned int position_ws;   // demanded ws position given by Modbus Client
 
 // PID
 double loadcell_target, pid_output_ws;
@@ -224,7 +232,7 @@ void setup() {
 
   //turn the PID on
   Ws_PID.SetMode(AUTOMATIC);
-  Ws_PID.SetOutputLimits(0, WS_MOTION_RANGE);
+  Ws_PID.SetSampleTime(1);
 
   /* **************************************************************
    * ******************** I2C Communication: **********************
@@ -255,8 +263,6 @@ void loop() {
   */
   getLoadcells();
   getEndswitches();
-  serialPrintSystemData();
-  serialPrintReceivedData();
 
   // state machine
   if (mode_ == 0) {
@@ -269,62 +275,153 @@ void loop() {
     closeOS();
   }
   else if (mode_ == 3) {
-    semiAdaptiveWS();
+    tareLoadcells();
   }
   else if (mode_ == 4) {
-    adaptiveWS();
+    //configuredWS();
   }
   else if (mode_ == 5) {
-    demoWS();
+    //adaptiveWS();
   }
   else if (mode_ == 6) {
-    tare_();
+    //semiAdaptiveWS();
   }
-
+  else if (mode_ == 7) {
+    demoWS();
+  }
+  else if (mode_ == 7) {
+    debugViaSerial();
+  }
+  //catchLooptime();
 }
 
 /*
  * **********************************************************************************************************
- * ****************************************  GENERAL FUNCTIONS  *********************************************
+ * *************************************  STATE MACHINE FUNCTIONS  ******************************************
  * **********************************************************************************************************
 */
 
-void ledDelayBlink(int delay_time, int blink_times) {
+void openOS() {
   /*
-     Indicates Setup Progress with blinking. Acts blocking.
+     Tests necessary: What is the fastest speed the servos can follow?
   */
-  for (int i = 0; i < blink_times; i++) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(delay_time / (blink_times * 2));
-    digitalWrite(LED_BUILTIN, LOW);
-    delay(delay_time / (blink_times * 2));
+
+  if ( os_pos_right != OS_POS_OPEN_RIGHT || os_pos_left != OS_POS_OPEN_LEFT) {
+    Os_Right.setEaseToD(OS_POS_OPEN_RIGHT, 1000); // (postion, time to get there)
+    Os_Left.setEaseToD(OS_POS_OPEN_LEFT, 1000); // (postion, time to get there)
+    synchronizeAllServosStartAndWaitForAllServosToStop(); // moves in blocking mode
+
+    os_pos_right = OS_POS_OPEN_RIGHT; // set position
+    os_pos_left = OS_POS_OPEN_LEFT;   // set position
   }
 }
 
-void getLoadcells() {
-  static boolean newDataReady = false;
+void closeOS() {
+  /*
+     Tests necessary: What is the fastest speed the servos can follow?
+  */
 
-  // check for new data/start next conversion:
-  if (Loadcell_Right.update()) newDataReady = true;
-  Loadcell_Left.update();
+  if (os_pos_right != OS_POS_CLOSED_RIGHT || os_pos_left != OS_POS_CLOSED_LEFT) {
+    Os_Right.setEaseToD(OS_POS_CLOSED_RIGHT, 1000); // (postion, time to get there)
+    Os_Left.setEaseToD(OS_POS_CLOSED_LEFT, 1000); // (postion, time to get there)
+    synchronizeAllServosStartAndWaitForAllServosToStop(); // moves in blocking mode
 
-  //get smoothed? value from data set
-  if ((newDataReady)) {
-    loadcell_value_right = Loadcell_Right.getData();
-    loadcell_value_left = Loadcell_Left.getData();
-    loadcell_value_mean = (loadcell_value_right + loadcell_value_left) / 2;
-    /*
-      Serial.print(loadcell_value_right);
-      Serial.print("  ");
-      Serial.println(loadcell_value_left);
-    */
-    newDataReady = false;
+    os_pos_right = OS_POS_CLOSED_RIGHT; // set position, might unnecessary with new library
+    os_pos_left = OS_POS_CLOSED_LEFT;
   }
 }
 
-void getEndswitches() {
-  endswitch_right = !digitalRead(ENDSWITCH_RIGHT);    // due to utilized internal pullup resistors switch read would be always high and low on press, thats why we negate
-  endswitch_left = !digitalRead(ENDSWITCH_LEFT);
+void tareLoadcells() {
+  /*
+     Tares both loadcells.
+  */
+
+  Loadcell_Right.tareNoDelay();
+  Loadcell_Left.tareNoDelay();
+
+  //check if last tare operation is complete
+  while (Loadcell_Right.getTareStatus() == false) {
+    // wait
+    Serial.println("Taring...");
+  }
+  while (Loadcell_Left.getTareStatus() == false) {
+    // wait
+    Serial.println("Taring...");
+  }
+}
+
+void configuredWS() {
+  /*
+     positioning of ws servos with inverse kinematics following desired ws_position
+  */
+  const static double bbb = 10;  // in mm axis to axis
+  const static double ccc = 20;  // in mm
+  double alpha = -acos(
+               (2 * pow(bbb, 4) - pow(bbb, 2) * pow(ccc, 2) + pow(bbb, 2) * pow(position_ws, 2) - sqrt(
+                  4 * pow(bbb, 4) * pow(ccc, 2) * pow(position_ws, 2) - pow(bbb, 2) * pow(ccc, 4) * pow(position_ws, 2) + 2 * pow(bbb, 2) * pow(ccc, 2) * pow(position_ws, 4) - pow(bbb, 2) * pow(position_ws, 6))
+               ) / (2 * (pow(bbb, 4) + pow(bbb, 2) * pow(position_ws, 2)))
+             );
+  ws_pos_right = WS_POS_MID_LEFT + alpha;
+  ws_pos_left = WS_POS_MID_LEFT - alpha;
+  Serial.println(alpha);
+  // move servos and check for endstops
+  // time for servos to move
+}
+
+void adaptiveWS() {
+  /*
+     positioning of ws servos with pure pid control
+  */
+  Ws_PID.SetOutputLimits(0, (WS_MOTION_RANGE_2EXT + WS_MOTION_RANGE_2PULL));
+  Ws_PID.SetTunings(Kp, Ki, Kd);
+  Ws_PID.Compute();  //PID
+  Ws_Left.write(WS_POS_EXT_RIGHT + pid_output_ws);
+  Ws_Right.write(WS_POS_EXT_LEFT - pid_output_ws);
+  // time for servos to move
+}
+
+void semiAdaptiveWS() {
+  /*
+     positioning of ws servos with position_ws and error handling with pid
+  */
+  configuredWS();
+  static double controller_range = ((WS_MOTION_RANGE_2EXT + WS_MOTION_RANGE_2PULL) * max_influence_controller);
+  Ws_PID.SetOutputLimits(-controller_range / 2, controller_range / 2);
+  Ws_PID.SetTunings(Kp, Ki, Kd);
+  Ws_PID.Compute();  //PID
+
+  if ((ws_pos_right + pid_output_ws) >= WS_POS_EXT_RIGHT && (ws_pos_right + pid_output_ws) <= WS_POS_EXT_RIGHT + (WS_MOTION_RANGE_2EXT + WS_MOTION_RANGE_2PULL)) {   // if motion is in motion bounds
+    Ws_Left.write(ws_pos_right + pid_output_ws);
+    Ws_Right.write(ws_pos_left - pid_output_ws);
+  }
+  else if ((ws_pos_right + pid_output_ws) < WS_POS_EXT_RIGHT) {
+    Ws_Left.write(WS_POS_EXT_LEFT);
+    Ws_Right.write(WS_POS_EXT_RIGHT);
+  }
+  else {
+    Ws_Left.write(WS_POS_EXT_LEFT - (WS_MOTION_RANGE_2EXT + WS_MOTION_RANGE_2PULL));  //ws_pull
+    Ws_Right.write(WS_POS_EXT_RIGHT + (WS_MOTION_RANGE_2EXT + WS_MOTION_RANGE_2PULL));  //ws_pull
+  }
+}
+
+void demoWS() {
+  /*
+     positioning of ws servos following a sine accelaration curve for demo
+  */
+  Ws_Right.setEasingType(EASE_SINE_IN_OUT); // position curve type
+  Ws_Left.setEasingType(EASE_SINE_IN_OUT);  // position curve type
+
+  Ws_Right.setEaseToD(WS_POS_EXT_RIGHT + (WS_MOTION_RANGE_2EXT + WS_MOTION_RANGE_2PULL), 1000);  // move to WS_POS_PULL_LEFT with total motion range so both servos move the same amount
+  Ws_Left.setEaseToD(WS_POS_EXT_LEFT - (WS_MOTION_RANGE_2EXT + WS_MOTION_RANGE_2PULL), 1000);  // move to WS_POS_PULL_RIGHT motion range
+  synchronizeAllServosStartAndWaitForAllServosToStop();
+  Ws_Right.setEaseToD(WS_POS_EXT_RIGHT, 1000);
+  Ws_Left.setEaseToD(WS_POS_EXT_LEFT, 1000);
+  synchronizeAllServosStartAndWaitForAllServosToStop();
+}
+
+void debugViaSerial() {
+  serialPrintSystemData();
+  serialPrintReceivedData();  // disable in esp32 version
 }
 
 void serialPrintSystemData() {
@@ -357,6 +454,66 @@ void serialPrintReceivedData() {
   Serial.print(Kd);
   Serial.print(" Max Influence Controller: ");
   Serial.println(max_influence_controller);
+}
+
+/*
+ * **********************************************************************************************************
+ * ****************************************  GENERAL FUNCTIONS  *********************************************
+ * **********************************************************************************************************
+*/
+
+void ledDelayBlink(int delay_time, int blink_times) {
+  /*
+     Indicates Setup Progress with blinking. Acts blocking.
+  */
+  for (int i = 0; i < blink_times; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(delay_time / (blink_times * 2));
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(delay_time / (blink_times * 2));
+  }
+}
+
+void getLoadcells() {
+  static boolean newDataReady = false;
+
+  // check for new data/start next conversion:
+  if (Loadcell_Right.update()) {
+    newDataReady = true;
+    //catchTimeBetweenMeasurements(); // uncommand if needed
+  }
+
+  Loadcell_Left.update();
+
+  if ((newDataReady)) {
+    loadcell_value_right = Loadcell_Right.getData();
+    loadcell_value_left = Loadcell_Left.getData();
+    loadcell_value_mean = (loadcell_value_right + loadcell_value_left) / 2;
+    newDataReady = false;
+  }
+}
+
+void getEndswitches() {
+  endswitch_right = !digitalRead(ENDSWITCH_RIGHT);    // due to utilized internal pullup resistors switch read would be always high and low on press, thats why we negate
+  endswitch_left = !digitalRead(ENDSWITCH_LEFT);
+}
+
+void catchLooptime() {
+  static unsigned long prev_millis;
+  unsigned long looptime;
+  looptime = millis() - prev_millis;
+  prev_millis = millis();
+  Serial.print("Looptime in ms: ");
+  Serial.println(looptime);
+}
+
+void catchTimeBetweenMeasurements() {
+  static unsigned long prev_millis;
+  unsigned long time_between_measurements;
+  time_between_measurements = millis() - prev_millis;
+  prev_millis = millis();
+  Serial.print("Time between Loadcell Measurements: ");
+  Serial.println(time_between_measurements);
 }
 
 /*
@@ -427,81 +584,4 @@ void int2bytes(int split_me) {
   */
   payload[0] = highByte(split_me);
   payload[1] = lowByte(split_me);
-}
-/*
- * **********************************************************************************************************
- * *************************************  STATE MACHINE FUNCTIONS  ******************************************
- * **********************************************************************************************************
-*/
-
-void openOS() {
-  /*
-     Tests necessary: What is the fastest speed the servos can follow?
-  */
-
-  if ( os_pos_right != OS_POS_OPEN_RIGHT || os_pos_left != OS_POS_OPEN_LEFT) {
-    Os_Right.setEaseToD(OS_POS_OPEN_RIGHT, 1000); // (postion, time to get there)
-    Os_Left.setEaseToD(OS_POS_OPEN_LEFT, 1000); // (postion, time to get there)
-    synchronizeAllServosStartAndWaitForAllServosToStop(); // moves in blocking mode
-
-    os_pos_right = OS_POS_OPEN_RIGHT; // set position
-    os_pos_left = OS_POS_OPEN_LEFT;   // set position
-  }
-}
-
-void closeOS() {
-  /*
-     Tests necessary: What is the fastest speed the servos can follow?
-  */
-
-  if (os_pos_right != OS_POS_CLOSED_RIGHT || os_pos_left != OS_POS_CLOSED_LEFT) {
-    Os_Right.setEaseToD(OS_POS_CLOSED_RIGHT, 1000); // (postion, time to get there)
-    Os_Left.setEaseToD(OS_POS_CLOSED_LEFT, 1000); // (postion, time to get there)
-    synchronizeAllServosStartAndWaitForAllServosToStop(); // moves in blocking mode
-
-    os_pos_right = OS_POS_CLOSED_RIGHT; // set position, might unnecessary with new library
-    os_pos_left = OS_POS_CLOSED_LEFT;
-  }
-}
-
-void demoWS() {
-  closeOS();
-  // positioning of ws servos following a sine accelaration curve for testing
-  Ws_Right.setEasingType(EASE_SINE_IN_OUT); // position curve type
-  Ws_Left.setEasingType(EASE_SINE_IN_OUT);  // position curve type
-
-  Ws_Right.setEaseToD(WS_POS_EXT_RIGHT + WS_MOTION_RANGE, 1000);  // move to WS_POS_PULL_LEFT with motion range
-  Ws_Left.setEaseToD(WS_POS_EXT_LEFT - WS_MOTION_RANGE, 1000);  // move to WS_POS_PULL_RIGHT motion range
-  synchronizeAllServosStartAndWaitForAllServosToStop();
-  Ws_Right.setEaseToD(WS_POS_EXT_RIGHT, 1000);
-  Ws_Left.setEaseToD(WS_POS_EXT_LEFT, 1000);
-  synchronizeAllServosStartAndWaitForAllServosToStop();
-}
-
-void adaptiveWS() {
-  closeOS();
-  Ws_PID.Compute();  //PID
-  Ws_Left.writeMicroseconds(WS_POS_EXT_RIGHT + pid_output_ws);
-  Ws_Right.writeMicroseconds(WS_POS_EXT_LEFT - pid_output_ws);
-}
-
-void semiAdaptiveWS() {
-  // in progress
-}
-
-void tare_() {
-  /*
-     Tares both loadcells.
-  */
-
-  Loadcell_Right.tareNoDelay();
-  Loadcell_Left.tareNoDelay();
-
-  //check if last tare operation is complete
-  while (Loadcell_Right.getTareStatus() == false) {
-    Serial.println("Taring...");
-  }
-  while (Loadcell_Left.getTareStatus() == false) {
-    Serial.println("Taring...");
-  }
 }
