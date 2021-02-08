@@ -6,30 +6,34 @@
 
 
 /*
- * Callibration:
- * Following values describe the opening and closing positions of the servos (PWM signal).
- * The sketch "Servo_callibration" was used to figure those values.
- * Perspective is mover to foil:
- * OS_LEFT (OS Left)
- *  open 1020
- *  closed 1620
- * OS_RIGHT (OS Right)
- *  open 1700
- *  closed 1094
- * WS_LEFT (WS Left)
- *  extended 2260
- *  pull 1200
- * WS_RIGHT (WS Right)
- *  extended 985
- *  pull 2104
- *  
- *  Those are set as postions and a motion range is set (f.e. OS_MOTION_RANGE = 1700 - 1094). This way both servos have to move the same amount.
- */
+   Callibration:
+   Following values describe the opening and closing positions of the servos (PWM signal).
+   The sketch "Servo_callibration" was used to figure those values.
+   Perspective is mover to foil:
+   //MICROSECONDS FOR OS CAUSE IT WORKS BETTER
+   Os_Left (OS Left)
+    open 1020
+    closed 1620
+   Os_Right (OS Right)
+    open 1700
+    closed 1094
+   //DEEGREES FOR WS
+   Ws_Left (WS Left)
+    extended 135
+    pull 33
+    middle 86
+   Ws_Right (WS Right)
+    extended 43
+    pull 148
+    middle 88
+
+    Those are set as postions and a motion range is set (f.e. OS_MOTION_RANGE = 1700 - 1094). This way both servos have to move the same amount.
+*/
  
-#include <Servo.h>  
+#include <ESP32Servo.h>  
 
 const String SERVO_NAMES[] = {"OS_LEFT", "OS_RIGHT", "WS_LEFT", "WS_RIGHT"};
-const int SERVO_PINOUT[] = {6, 5, 10, 9};
+const int SERVO_PINOUT[] = {26, 27, 33, 32};
 const int ARRAY_LENGTH = 4;
 const double MAX_SERVO_RANGE[] = {360, 360, 360, 360};
 const double SERVO_STARTING_POS[] = {0, 0, 0, 0};                    // values for KontiBat Project, yours might be different
@@ -112,12 +116,12 @@ void calibrateServo(){
     servo_direction = Serial.read();
     if (servo_direction == 'w'){
       if (servo_pos[servo_pointer] < MAX_SERVO_RANGE[servo_pointer]){
-        servo_pos[servo_pointer] += 0.1;
+        servo_pos[servo_pointer] += 1;
       }  
     }
     else if (servo_direction == 's'){
       if (servo_pos[servo_pointer] > 0){
-        servo_pos[servo_pointer] -= 0.1;  
+        servo_pos[servo_pointer] -= 1;  
       }
     }
     else if (servo_direction == 'q'){

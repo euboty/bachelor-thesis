@@ -22,27 +22,21 @@
  * **********************************************************************************************************
 */
 
-const int LED_BUILTIN = 1;
-
 // Program Mode
 byte mode_ = 0;
 
-// Failure Alert
-bool setup_failure = 0;
+// LED Pinout
+const byte LED_BUILTIN = 1;
 
 // Endswitch Pinout
-const byte ENDSWITCH_RIGHT = 7;
-const byte ENDSWITCH_LEFT = 8;
-
-// Endswitch Vars
-bool endswitch_right;
-bool endswitch_left;
+const byte ENDSWITCH_RIGHT = 16;
+const byte ENDSWITCH_LEFT = 17;
 
 // Loadcell Pinout
-const byte LOADCELL_RIGHT_DOUT_PIN = 3;
-const byte LOADCELL_RIGHT_SCK_PIN = 4;
-const byte LOADCELL_LEFT_DOUT_PIN = 11;
-const byte LOADCELL_LEFT_SCK_PIN = 12;
+const byte LOADCELL_RIGHT_DOUT_PIN = 22;
+const byte LOADCELL_RIGHT_SCK_PIN = 23;
+const byte LOADCELL_LEFT_DOUT_PIN = 18;
+const byte LOADCELL_LEFT_SCK_PIN = 19;
 
 // Loadcell HX711 Constructor (dout pin, sck pin)
 HX711_ADC Loadcell_Right(LOADCELL_RIGHT_DOUT_PIN, LOADCELL_RIGHT_SCK_PIN);
@@ -61,10 +55,10 @@ double loadcell_value_left;
 double loadcell_value_mean;
 
 // Servo Pinout
-const byte OS_RIGHT_PIN = 5;
-const byte OS_LEFT_PIN = 6;
-const byte WS_RIGHT_PIN = 9;
-const byte WS_LEFT_PIN = 10;
+const byte OS_RIGHT_PIN = 27;
+const byte OS_LEFT_PIN = 26;
+const byte WS_RIGHT_PIN = 32;
+const byte WS_LEFT_PIN = 33;
 
 // Servos
 ServoEasing Os_Right;
@@ -78,12 +72,12 @@ ServoEasing Ws_Left;
    The sketch "Servo_callibration" was used to figure those values.
    Perspective is mover to foil:
    //MICROSECONDS FOR OS CAUSE IT WORKS BETTER
-   Os_Left (OS Left)
-    open 1020
-    closed 1620
    Os_Right (OS Right)
-    open 1700
-    closed 1094
+    open 112
+    closed 53
+   Os_Left (OS Left)
+    open 48
+    closed 105
    //DEEGREES FOR WS
    Ws_Left (WS Left)
     extended 135
@@ -97,15 +91,15 @@ ServoEasing Ws_Left;
     Those are set as postions and a motion range is set (f.e. OS_MOTION_RANGE = 1700 - 1094). This way both servos have to move the same amount.
 */
 
-// OS Servo Callibration - PWM Microseconds instead of degrees because it wors better with these servos
+// OS Servo Callibration - Degrees - servo steps is in 1 degrees --> could also be ints
 int os_pos_right;                                                         // tracks is position in software
-const int OS_POS_OPEN_RIGHT = 1700;
-const int OS_POS_CLOSED_RIGHT = 1094;
+const int OS_POS_OPEN_RIGHT = 112;
+const int OS_POS_CLOSED_RIGHT = 53;
 int os_pos_left;                                                          // tracks is position in software
-const int OS_POS_OPEN_LEFT = 1020;
-const int OS_POS_CLOSED_LEFT = 1620;
+const int OS_POS_OPEN_LEFT = 47;
+const int OS_POS_CLOSED_LEFT = 106;
 
-// WS Servo Callibration - Degrees
+// WS Servo Callibration - Degrees - servo steps is in 1 degrees --> could also be ints
 double ws_pos_right;
 const double WS_POS_EXT_RIGHT = 41;
 const double WS_POS_MID_RIGHT = 88;
@@ -182,16 +176,6 @@ void setup() {
   Serial.println("Establishing wifi connection");
   wifiManager.autoConnect("KontiBat_Greifer_WlanConfig");   //access @ 192.168.4.1
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  
-  Serial.println("Connected!");
-  Serial.println();
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-
   /* **************************************************************
    * ************************** LED: ******************************
    * **************************************************************/
@@ -210,24 +194,22 @@ void setup() {
    * ************************* SERVOS: ****************************
    * **************************************************************/
 
-  ledDelayBlink(1000, 1); // setup routine step indicator
-
   // configuration of servos
   if (Os_Right.attach(OS_RIGHT_PIN) == INVALID_SERVO) {
     Serial.println(F("Error attaching servo Os_Right"));
-    setup_failure = true;
+    mb.Ists(SETUP_FAILURE_ISTS, true);
   }
   if (Os_Left.attach(OS_LEFT_PIN) == INVALID_SERVO) {
     Serial.println(F("Error attaching servo Os_Right"));
-    setup_failure = true;
+    mb.Ists(SETUP_FAILURE_ISTS, true);
   }
   if (Ws_Right.attach(WS_RIGHT_PIN) == INVALID_SERVO) {
     Serial.println(F("Error attaching servo Ws_Right"));
-    setup_failure = true;
+    mb.Ists(SETUP_FAILURE_ISTS, true);
   }
   if (Ws_Left.attach(WS_LEFT_PIN) == INVALID_SERVO) {
     Serial.println(F("Error attaching servo Ws_Left"));
-    setup_failure = true;
+    mb.Ists(SETUP_FAILURE_ISTS, true);
   }
 
   Os_Right.setEasingType(EASE_CUBIC_OUT); // position curve type
@@ -249,7 +231,7 @@ void setup() {
    * *********************** LOADCELLS: ***************************
    * **************************************************************/
 
-  ledDelayBlink(2000, 2); // setup routine step indicator
+  ledDelayBlink(2000, 5); // indicator loadcells are getting tared
 
   // loadcell startup
   byte loadcell_right_rdy = false;
@@ -263,16 +245,18 @@ void setup() {
   }
   if (Loadcell_Right.getTareTimeoutFlag() || Loadcell_Right.getSignalTimeoutFlag()) {
     Serial.println("Timeout, check MCU>HX711 right wiring and pin designations");
-    setup_failure = true;
+    mb.Ists(SETUP_FAILURE_ISTS, true);
     while (true);
   }
   if (Loadcell_Left.getTareTimeoutFlag() || Loadcell_Left.getSignalTimeoutFlag()) {
     Serial.println("Timeout, check MCU>HX711 left wiring and pin designations");
-    setup_failure = true;
+    mb.Ists(SETUP_FAILURE_ISTS, true);
     while (true);
   }
   Loadcell_Right.setCalFactor(LOADCELL_CAL_RIGHT);
   Loadcell_Left.setCalFactor(LOADCELL_CAL_LEFT);
+
+  ledDelayBlink(1000, 5); // indicator loadcells are tared
 
   /* **************************************************************
    * ******************** PID Controller: *************************
@@ -334,8 +318,9 @@ void loop() {
   getEndswitches();
 
   mb.task();  // call once inside loop - all modbus magic here
-
+  
   // state machine
+  mode_ = mb.Hreg(MODE_HREG);
   if (mode_ == 0) {
     // do nothing rest state
   }
@@ -349,18 +334,24 @@ void loop() {
     tareLoadcells();
   }
   else if (mode_ == 4) {
-    //configuredWS();
+    //configuredWSInverseKin();
+  }
+  else if (mode_ == 4) {
+    //configuredWSDirectDrive();
   }
   else if (mode_ == 5) {
     //adaptiveWS();
   }
   else if (mode_ == 6) {
-    //semiAdaptiveWS();
+    //semiAdaptiveWSInverseKin();
   }
   else if (mode_ == 7) {
+    //semiAdaptiveWSDirectDrive();
+  }
+  else if (mode_ == 8) {
     demoWS();
   }
-  else if (mode_ == 7) {
+  else if (mode_ == 9) {
     debugViaSerial();
   }
   //catchLooptime();
@@ -419,9 +410,11 @@ void tareLoadcells() {
     // wait
     Serial.println("Taring...");
   }
+  
+  mb.Hreg(MODE_HREG, 0);  // otherwise it keeps taring over and over till mode is changed on client side
 }
 
-void configuredWS() {
+void configuredWSInverseKin() {
   /*
      positioning of ws servos with inverse kinematics following desired ws_position
   */
@@ -451,11 +444,11 @@ void adaptiveWS() {
   // time for servos to move
 }
 
-void semiAdaptiveWS() {
+void semiAdaptiveWSInverseKin() {
   /*
      positioning of ws servos with position_ws and error handling with pid
   */
-  configuredWS();
+  configuredWSInverseKin();
   static double controller_range = ((WS_MOTION_RANGE_2EXT + WS_MOTION_RANGE_2PULL) * max_influence_controller);
   Ws_PID.SetOutputLimits(-controller_range / 2, controller_range / 2);
   Ws_PID.SetTunings(Kp, Ki, Kd);
@@ -497,7 +490,7 @@ void debugViaSerial() {
 
 void serialPrintSystemData() {
   Serial.print(" Setup Fehlermeldung: ");
-  Serial.print(setup_failure);
+  Serial.print(mb.Ists(SETUP_FAILURE_ISTS));
   Serial.print(" Loadcell Left: ");
   Serial.print(loadcell_value_left);
   Serial.print(" Loadcell Right: ");
@@ -505,9 +498,9 @@ void serialPrintSystemData() {
   Serial.print(" Loadcell Mean: ");
   Serial.print(loadcell_value_mean);
   Serial.print(" Endswitch Left: ");
-  Serial.print(endswitch_left);
+  Serial.print(mb.Ists(OS_ENDSWITCH_LEFT_ISTS));
   Serial.print(" Endswitch Right: ");
-  Serial.print(endswitch_right);
+  Serial.print(mb.Ists(OS_ENDSWITCH_RIGHT_ISTS));
 }
 
 void serialPrintReceivedData() {
@@ -565,8 +558,8 @@ void getLoadcells() {
 }
 
 void getEndswitches() {
-  endswitch_right = !digitalRead(ENDSWITCH_RIGHT);    // due to utilized internal pullup resistors switch read would be always high and low on press, thats why we negate
-  endswitch_left = !digitalRead(ENDSWITCH_LEFT);
+  mb.Ists(OS_ENDSWITCH_RIGHT_ISTS, !digitalRead(ENDSWITCH_RIGHT));    // due to utilized internal pullup resistors switch read would be always high and low on press, thats why we negate
+  mb.Ists(OS_ENDSWITCH_LEFT_ISTS, !digitalRead(ENDSWITCH_LEFT));
 }
 
 void catchLooptime() {
