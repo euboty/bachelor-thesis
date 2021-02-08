@@ -33,7 +33,7 @@
 #include <ESP32Servo.h>  
 
 const String SERVO_NAMES[] = {"OS_LEFT", "OS_RIGHT", "WS_LEFT", "WS_RIGHT"};
-const int SERVO_PINOUT[] = {26, 27, 33, 32};
+const int SERVO_PINOUT[] = {26, 27, 32, 33};
 const int ARRAY_LENGTH = 4;
 const double MAX_SERVO_RANGE[] = {360, 360, 360, 360};
 const double SERVO_STARTING_POS[] = {0, 0, 0, 0};                    // values for KontiBat Project, yours might be different

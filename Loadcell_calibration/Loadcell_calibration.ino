@@ -25,10 +25,10 @@
 #include <EEPROM.h>
 
 // Force-Sensor Pinout set here according to application
-const byte FORCE_RIGHT_DOUT_PIN = 3;
-const byte FORCE_RIGHT_SCK_PIN = 4;
-const byte FORCE_LEFT_DOUT_PIN = 11; 
-const byte FORCE_LEFT_SCK_PIN = 12;
+const byte FORCE_RIGHT_DOUT_PIN = 22;
+const byte FORCE_RIGHT_SCK_PIN = 23;
+const byte FORCE_LEFT_DOUT_PIN = 18; 
+const byte FORCE_LEFT_SCK_PIN = 19;
 
 // pins:
 byte HX711_dout;
