@@ -1,22 +1,19 @@
 
 /*
- *SERVO CALIBRATION: 
- * Controlling multipe servos using w,s and q on the keyboard of your pc via serial communication with PuTTY or any other serial terminal. Print position on serial monitor.
+ * Florian Geissler 2020 
+ * Controlling multipe servos using w,s and q on the keyboard of your pc via serial communication 
+ * with PuTTY or any other serial terminal. Print position on serial monitor.
  */
 
-
 /*
-   Callibration:
-   Following values describe the opening and closing positions of the servos (PWM signal).
-   The sketch "Servo_callibration" was used to figure those values.
+   FOR THIS PARTICULAR POJECT ONLY:
    Perspective is mover to foil:
-   //MICROSECONDS FOR OS CAUSE IT WORKS BETTER
-   Os_Left (OS Left)
-    open 1020
-    closed 1620
    Os_Right (OS Right)
-    open 1700
-    closed 1094
+    open 112
+    closed 53
+   Os_Left (OS Left)
+    open 47
+    closed 106
    //DEEGREES FOR WS
    Ws_Left (WS Left)
     extended 135
@@ -26,17 +23,16 @@
     extended 43
     pull 148
     middle 88
-
-    Those are set as postions and a motion range is set (f.e. OS_MOTION_RANGE = 1700 - 1094). This way both servos have to move the same amount.
 */
  
-#include <ESP32Servo.h>  
+#include <ServoEasing.h>  
 
+// Fill to your needs:
 const String SERVO_NAMES[] = {"OS_LEFT", "OS_RIGHT", "WS_LEFT", "WS_RIGHT"};
 const int SERVO_PINOUT[] = {26, 27, 32, 33};
 const int ARRAY_LENGTH = 4;
 const double MAX_SERVO_RANGE[] = {360, 360, 360, 360};
-const double SERVO_STARTING_POS[] = {0, 0, 0, 0};                    // values for KontiBat Project, yours might be different
+const double SERVO_STARTING_POS[] = {50, 50, 50, 50};             // values for this particular project, yours might be different
 
 char servo_pointer_char;
 int servo_pointer;
@@ -44,8 +40,6 @@ int servo_pointer;
 char servo_direction;
 double servo_pos[ARRAY_LENGTH];
 double servo_pos_prev[ARRAY_LENGTH];
-
-
 
 Servo SERVO[ARRAY_LENGTH];
 
@@ -87,6 +81,7 @@ void chooseServo() {
     Serial.print(" : ");
     Serial.println(SERVO_NAMES[i]);
   }
+  
   Serial.println();
   Serial.println("Type the desired servo number:");
   while (Serial.available() == 0) {};                   // wait till user enters servo number
