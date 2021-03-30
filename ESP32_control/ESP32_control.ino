@@ -27,8 +27,11 @@
 const byte LED_BUILTIN = 1;
 
 // Endswitch Pinout
-const byte ENDSWITCH_RIGHT = 16;
-const byte ENDSWITCH_LEFT = 17;
+const byte ENDSWITCH_RIGHT = 17;
+const byte ENDSWITCH_LEFT = 16;
+
+// Test Bench Pinout
+const byte TESTBENCH = 13;
 
 // Loadcell Pinout
 const byte LOADCELL_RIGHT_DOUT_PIN = 22;
@@ -53,38 +56,22 @@ boolean _tare = true; // set this to false if you don't want tare to be performe
    Servo Callibration:
    Following values describe the opening and closing positions of the servos.
    The sketch "Servo_callibration" was used to figure those values.
-   Perspective is mover to foil:
-   Os_Right (OS Right)
-    open 112
-    closed 53
-   Os_Left (OS Left)
-    open 47
-    closed 106
-   //DEEGREES FOR KSA
-   Ksa_Left (KSA Left)
-    extended 135
-    pull 33
-    middle 86
-   Ksa_Right (KSA Right)
-    extended 43
-    pull 148
-    middle 88
 */
 
 // OS Servo Callibration - Degrees
-int os_pos_right;   // tracks is position in software
-const int OS_POS_OPEN_RIGHT = 112;
-const int OS_POS_CLOSED_RIGHT = 53;
-int os_pos_left;    // tracks is position in software
-const int OS_POS_OPEN_LEFT = 47;
-const int OS_POS_CLOSED_LEFT = 106;
+double os_pos_right;   // tracks is position in software
+const double OS_POS_OPEN_RIGHT = 114;
+const double OS_POS_CLOSED_RIGHT = 52;
+double os_pos_left;    // tracks is position in software
+const double OS_POS_OPEN_LEFT = 47;
+const double OS_POS_CLOSED_LEFT = 106;
 
 // KSA Servo Callibration - Degrees
-const double KSA_DURATION = 200; // desired ksa time in milliseconds
-const double KSA_POS_EXT = 8.4;
-const double KSA_POS_PULL = 0;
-const double KSA_MOTION_RANGE = KSA_POS_EXT - KSA_POS_PULL;
-const double KSA_POS_MID_RIGHT = 88;
+double ksa_position;
+const double KSA_POS_EXT = 0;
+const double KSA_POS_PULL = -8.4;
+const double KSA_MOTION_RANGE = KSA_POS_EXT + KSA_POS_PULL;
+const double KSA_POS_MID_RIGHT = 92;
 const double KSA_POS_MID_LEFT = 86;
 
 // Modbus Registers Offsets
@@ -98,31 +85,34 @@ const int OS_ENDSWITCH_LEFT_ISTS = 2;
 
 // Holding Register (READ&WRITE)
 const int MODE_HREG = 0;
-const int FORCE_TARGET_HREG = 1;
-const int POSITION_KSA_HREG = 2;
-const int KP_HREG = 3;
-const int I_HREG = 4;
-const int D_HREG = 5;
-const int PID_INFLUENCE_HREG = 6; // how much influence can the PID Controller take on KSA position in %
-const int OS_OFFSET_HREG = 7;                                                                                                             // DO MEEEEEEEEEEEEEEEEEEEEEEE
+const int OS_OFFSET_HREG = 1;
+const int KSA_POSITION_TARGET_HREG = 2;
+const int MOVERSPEED_HREG = 3;
+const int KSA_WAY_LENGTH_HREG = 4;
+const int FORCE_TARGET_HREG = 5;
+const int KP_HREG = 6;
+const int KI_HREG = 7;
+const int KD_HREG = 8;
 
 // Input Register (READ)
-const int FORCE_RIGHT_REAL_IREG = 0;
-const int FORCE_LEFT_REAL_IREG = 1;
-const int FORCE_COMBINED_REAL_IREG = 2;                                                                                                   // DO MEEEEEEEEEEEEEEEEEEEEEEEE
+const int FORCE_COMBINED_REAL_IREG = 0;
+const int FORCE_RIGHT_REAL_IREG = 1;
+const int FORCE_LEFT_REAL_IREG = 2;
 
 // VARS
 bool os_endswitch_right;
 bool os_endswitch_left;
 byte mode_ = 0; // program for boot -> do nothing
-double loadcell_target;
-double ksa_position;
-double Kp = 0, Ki = 0, Kd = 0; // set through modbus client
-double pid_influence;  // in percent of ksa motion range for semiAdaptive program
-double os_offset = 0;                                                                                                                          // DO MEEEEEEEEEEEEEEEEEEEEEEEE
-double loadcell_value_right;
-double loadcell_value_left;
-double loadcell_value_combined;                                                                                                                      // DO MEEEEEEEEEEEEEEEEEEEEEEEE
+double os_offset;
+double ksa_position_target;
+double moverspeed;
+double ksa_way_length;
+double ksa_duration;
+double force_MilliN_target;
+double Kp, Ki, Kd;
+double force_milliN_combined;
+double force_milliN_right;
+double force_milliN_left;
 
 // Loadcell HX711 Constructor (dout pin, sck pin)
 HX711_ADC Loadcell_Right(LOADCELL_RIGHT_DOUT_PIN, LOADCELL_RIGHT_SCK_PIN);
@@ -135,9 +125,7 @@ ServoEasing Ksa_Right;
 ServoEasing Ksa_Left;
 
 // PID
-PID Ksa_PID_Adaptive(&loadcell_value_combined, &ksa_position, &loadcell_target, Kp, Ki, Kd, DIRECT); // Input, Output, Setpoint, Kp, Ki, Kd
-double ksa_position_change;
-PID Ksa_PID_SemiAdaptive(&loadcell_value_combined, &ksa_position_change, &loadcell_target, Kp, Ki, Kd, DIRECT); // Input, Output, Setpoint, Kp, Ki, Kd
+PID Ksa_PID_Adaptive(&force_milliN_combined, &ksa_position, &force_MilliN_target, Kp, Ki, Kd, REVERSE); // Input, Output, Setpoint, Kp, Ki, Kd
 
 // WIFI
 WiFiManager wifiManager;
@@ -163,7 +151,7 @@ void setup() {
    * ************************** GENERAL: *************************
    * *************************************************************/
 
-  Serial.begin(57600);     // baudrate (communication speed) of serial port (:= 57,6 kbps)
+  Serial.begin(115200);     // baudrate (communication speed) of serial port (:= 115,2 kbps)
   delay(10);
 
   /* *************************************************************
@@ -176,11 +164,13 @@ void setup() {
   wifiManager.autoConnect("KontiBat_Greifer_WlanConfig");   // access @ 192.168.4.1
 
   /* **************************************************************
-   * ******************** LED & ENDSWITCHES: **********************
+   * ************** LED & ENDSWITCHES & Testbench: ****************
    * **************************************************************/
 
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
+  pinMode(TESTBENCH, OUTPUT);
+  digitalWrite(TESTBENCH, HIGH);
   pinMode(ENDSWITCH_RIGHT, INPUT_PULLUP);
   pinMode(ENDSWITCH_LEFT, INPUT_PULLUP);
 
@@ -206,15 +196,15 @@ void setup() {
     setup_failure = true;
   }
 
-  Os_Right.setEasingType(EASE_CUBIC_OUT); // position curve type
-  Os_Left.setEasingType(EASE_CUBIC_OUT);  // position curve type
+  Os_Right.setEasingType(EASE_SINE_OUT); // position curve type
+  Os_Left.setEasingType(EASE_SINE_OUT);  // position curve type
 
   // move servos to starting position and save position
   Os_Right.write(OS_POS_OPEN_RIGHT);
   Os_Left.write(OS_POS_OPEN_LEFT);
   double alpha = ksaPosToDegree(KSA_POS_EXT);
-  Ksa_Right.write(KSA_POS_MID_RIGHT + alpha);
-  Ksa_Left.write(KSA_POS_MID_LEFT - alpha);
+  Ksa_Right.write(KSA_POS_MID_RIGHT - alpha);
+  Ksa_Left.write(KSA_POS_MID_LEFT + alpha);
 
   os_pos_right = OS_POS_OPEN_RIGHT;
   os_pos_left = OS_POS_OPEN_LEFT;
@@ -250,11 +240,8 @@ void setup() {
    * ******************** PID Controller: *************************
    * **************************************************************/
 
-  // initialize pids
   Ksa_PID_Adaptive.SetMode(AUTOMATIC);
-  Ksa_PID_Adaptive.SetSampleTime(1);  // calculate PID every millisecond
-  Ksa_PID_SemiAdaptive.SetMode(AUTOMATIC);
-  Ksa_PID_SemiAdaptive.SetSampleTime(1);  // calculate PID every millisecond
+  Ksa_PID_Adaptive.SetSampleTime(12.5);  // calculate PID every millisecond, move higher to stabelize
 
   /* **************************************************************
    * ************************ MODBUS: *****************************
@@ -269,18 +256,25 @@ void setup() {
 
   // Holding Register - int - read and write
   mb.addHreg(MODE_HREG);
-  mb.addHreg(FORCE_TARGET_HREG);
-  mb.addHreg(POSITION_KSA_HREG);
-  mb.addHreg(KP_HREG);
-  mb.addHreg(I_HREG);
-  mb.addHreg(D_HREG);
-  mb.addHreg(PID_INFLUENCE_HREG);
   mb.addHreg(OS_OFFSET_HREG);
+  mb.addHreg(KSA_POSITION_TARGET_HREG);
+  mb.addHreg(MOVERSPEED_HREG);
+  mb.addHreg(KSA_WAY_LENGTH_HREG);
+  mb.addHreg(FORCE_TARGET_HREG);
+  mb.addHreg(KP_HREG);
+  mb.addHreg(KI_HREG);
+  mb.addHreg(KD_HREG);
 
   // Input Register - int - read only
+  mb.addIreg(FORCE_COMBINED_REAL_IREG);
   mb.addIreg(FORCE_RIGHT_REAL_IREG);
   mb.addIreg(FORCE_LEFT_REAL_IREG);
-  mb.addIreg(FORCE_COMBINED_REAL_IREG);
+
+  // Initial Values
+  mb.Hreg(MOVERSPEED_HREG, moverspeed);
+  mb.Hreg(KSA_WAY_LENGTH_HREG, ksa_way_length);
+  mb.Hreg(KP_HREG, Kp);
+
 
   /* **************************************************************
    * ********************** SETUP DONE: ***************************
@@ -316,23 +310,26 @@ void loop() {
   }
   else if (mode_ == 3) {
     tareLoadcells();  // sets mode back to 0 after taring is done
+    mb.Hreg(MODE_HREG, 0);  // otherwise it keeps taring over and over which causes problems
   }
   else if (mode_ == 4) {
-    configuredKSA();  // sets mode back to 0 after one ksa iteration
+    controlledKSA();
   }
   else if (mode_ == 5) {
-    adaptiveKSA();
+    if (controlledConfiguredKSA()) {
+      mb.Hreg(MODE_HREG, 0);  // one ksa execution is over, go back to nothing
+    }
   }
   else if (mode_ == 6) {
-    semiAdaptiveKSA();  // sets mode back to 0 after one ksa iteration
+    adaptiveKSA();
   }
   else if (mode_ == 7) {
-    controlledKSA();
+    adaptiveConfiguredKSA();  // sets mode back to 0 after one ksa iteration
   }
   else if (mode_ == 8) {
     debugViaSerial();
   }
-  //catchLooptime();  // for testing only
+  //catchLooptime();  // uncommand for validation only
 }
 
 /*
@@ -346,8 +343,8 @@ void openOS() {
      Tests necessary: What is the fastest speed the servos can follow?
   */
   if ( os_pos_right != OS_POS_OPEN_RIGHT || os_pos_left != OS_POS_OPEN_LEFT) {  // check if already open
-    Os_Right.setEaseToD(OS_POS_OPEN_RIGHT, 1000); // (postion, time to get there)
-    Os_Left.setEaseToD(OS_POS_OPEN_LEFT, 1000); // (postion, time to get there)
+    Os_Right.setEaseToD(OS_POS_OPEN_RIGHT, 120); // (postion, time to get there)
+    Os_Left.setEaseToD(OS_POS_OPEN_LEFT, 120); // (postion, time to get there)
     synchronizeAllServosStartAndWaitForAllServosToStop(); // moves in blocking mode
     os_pos_right = OS_POS_OPEN_RIGHT;
     os_pos_left = OS_POS_OPEN_LEFT;
@@ -358,12 +355,12 @@ void closeOS() {
   /*
      Tests necessary: What is the fastest speed the servos can follow?
   */
-  if (os_pos_right != OS_POS_CLOSED_RIGHT || os_pos_left != OS_POS_CLOSED_LEFT) { // check if already closed
-    Os_Right.setEaseToD(OS_POS_CLOSED_RIGHT, 1000); // (postion, time to get there)
-    Os_Left.setEaseToD(OS_POS_CLOSED_LEFT, 1000); // (postion, time to get there)
+  if (os_pos_right != (OS_POS_CLOSED_RIGHT + os_offset) || os_pos_left != (OS_POS_CLOSED_LEFT - os_offset)) { // check if already closed
+    Os_Right.setEaseToD((OS_POS_CLOSED_RIGHT + os_offset), 180); // (postion, time to get there)
+    Os_Left.setEaseToD((OS_POS_CLOSED_LEFT - os_offset), 180); // (postion, time to get there)
     synchronizeAllServosStartAndWaitForAllServosToStop(); // moves in blocking mode
-    os_pos_right = OS_POS_CLOSED_RIGHT;
-    os_pos_left = OS_POS_CLOSED_LEFT;
+    os_pos_right = OS_POS_CLOSED_RIGHT + os_offset;
+    os_pos_left = OS_POS_CLOSED_LEFT - os_offset;
   }
 }
 
@@ -383,11 +380,24 @@ void tareLoadcells() {
     // wait
     Serial.println("Taring...");
   }
-
-  mb.Hreg(MODE_HREG, 0);  // otherwise it keeps taring over and over which causes problems
 }
 
-void configuredKSA() {
+void controlledKSA() {
+  double alpha = ksaPosToDegree(ksa_position_target);
+  Ksa_Right.write(KSA_POS_MID_RIGHT - alpha);
+  Ksa_Left.write(KSA_POS_MID_LEFT + alpha);
+  
+  // for validation only
+  Serial.print(ksa_position_target);
+  Serial.print(";");
+  Serial.print(force_milliN_combined);
+  Serial.print(";");
+  Serial.print(force_milliN_right);
+  Serial.print(";");
+  Serial.println(force_milliN_left);
+}
+
+bool controlledConfiguredKSA() {
   /*
      Positioning of KSA servos with following desired curve
   */
@@ -395,22 +405,34 @@ void configuredKSA() {
   static unsigned long t_start = 0;
 
   if (!in_action_flag) {
-    t_start = millis();
     in_action_flag = true;
+    digitalWrite(TESTBENCH, LOW);  // uncommand for testing
+    delayMicroseconds(20);           // uncommand for testing
+    digitalWrite(TESTBENCH, HIGH); // uncommand for testing
+    t_start = millis();
   }
 
-  double ff = 1 / (KSA_DURATION * 1000); // frequency
+  double ff = 1 / ksa_duration; // frequency
   unsigned long t = millis();
 
-  if ((t - t_start) <= KSA_DURATION) {
+  if ((t - t_start) <= ksa_duration) {
     ksa_position = KSA_MOTION_RANGE * sin((PI * ff) * (t - t_start));
     double alpha = ksaPosToDegree(ksa_position);
-    Ksa_Right.write(KSA_POS_MID_RIGHT + alpha);
-    Ksa_Left.write(KSA_POS_MID_LEFT - alpha);
+    Ksa_Right.write(KSA_POS_MID_RIGHT - alpha);
+    Ksa_Left.write(KSA_POS_MID_LEFT + alpha);
+    // for validation only
+    Serial.print(ksa_position);
+    Serial.print(";");
+    Serial.print(force_milliN_combined);
+    Serial.print(";");
+    Serial.print(force_milliN_right);
+    Serial.print(";");
+    Serial.println(force_milliN_left);
+    return false; // ksa movement not done yet
   }
   else {
     in_action_flag = false;
-    mb.Hreg(MODE_HREG, 0);  // one ksa execution is over, go back to do nothing
+    return true;  // ksa movement done
   }
 }
 
@@ -418,33 +440,28 @@ void adaptiveKSA() {
   /*
      Positioning of ksa servos with pure pid control
   */
-  Ksa_PID_Adaptive.SetOutputLimits(KSA_POS_PULL, KSA_POS_EXT);                                                                        // CHECKEN OB ICH HIER WAS VERTAUSCHT HABEEEEE
+  Ksa_PID_Adaptive.SetOutputLimits(KSA_POS_PULL, KSA_POS_EXT);
   Ksa_PID_Adaptive.SetTunings(Kp, Ki, Kd);
   Ksa_PID_Adaptive.Compute();  //PID
   double alpha = ksaPosToDegree(ksa_position);
-  Ksa_Left.write(KSA_POS_MID_RIGHT + alpha);
-  Ksa_Right.write(KSA_POS_MID_LEFT - alpha);
+  Ksa_Right.write(KSA_POS_MID_RIGHT - alpha);
+  Ksa_Left.write(KSA_POS_MID_LEFT + alpha);
+  
+  // for validation only
+  Serial.print(ksa_position);
+  Serial.print(";");
+  Serial.print(force_milliN_combined);
+  Serial.print(";");
+  Serial.print(force_milliN_right);
+  Serial.print(";");
+  Serial.println(force_milliN_left);
 }
 
-void semiAdaptiveKSA() {
+bool adaptiveConfiguredKSA() {
   /*
-     Positioning of ksa servos with configuredKSA and error handling with pid
+     Positioning of ksa servos with pure pid control follwówing configured force target curve
   */
-  configuredKSA();  // starts timing and takes care of ending the programm after one iteration
-  double pid_motion_range = (KSA_MOTION_RANGE * pid_influence);
-  Ksa_PID_SemiAdaptive.SetOutputLimits(-(pid_motion_range/2), (pid_motion_range/2));                                                                           // CHECKEN OB ICH HIER WAS VERTAUSCHT HABEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE
-  Ksa_PID_SemiAdaptive.SetTunings(Kp, Ki, Kd);
-  Ksa_PID_SemiAdaptive.Compute();  //PID
-
-  double alpha = ksaPosToDegree(ksa_position + ksa_position_change);
-  Ksa_Left.write(KSA_POS_MID_RIGHT + alpha);
-  Ksa_Right.write(KSA_POS_MID_LEFT - alpha);
-}
-
-void controlledKSA() {
-  double alpha = ksaPosToDegree(ksa_position);
-  Ksa_Right.write(KSA_POS_MID_RIGHT + alpha);
-  Ksa_Left.write(KSA_POS_MID_LEFT - alpha);
+  // placeholder program, implement just like controlledConfiguredKSA but with adaptiveKSA() and force_MilliN_target, instead of controlledKSA() and ws_position
 }
 
 void debugViaSerial() {
@@ -455,33 +472,37 @@ void debugViaSerial() {
 void serialPrintSystemData() {
   Serial.print(" Setup failure occured: ");
   Serial.print(mb.Ists(SETUP_FAILURE_ISTS));
-  Serial.print(" Loadcell Left: ");
-  Serial.print(loadcell_value_left);
-  Serial.print(" Loadcell Right: ");
-  Serial.print(loadcell_value_right);
-  Serial.print(" Loadcell Mean: ");
-  Serial.print(loadcell_value_combined);
-  Serial.print(" Endswitch Left: ");
-  Serial.print(os_endswitch_left);
   Serial.print(" Endswitch Right: ");
   Serial.print(os_endswitch_right);
+  Serial.print(" Endswitch Left: ");
+  Serial.print(os_endswitch_left);
+  Serial.print(" Force MilliN Combined: ");
+  Serial.print(force_milliN_combined);
+  Serial.print(" Force MilliN Right: ");
+  Serial.print(force_milliN_right);
+  Serial.print(" Force MilliN Left: ");
+  Serial.print(force_milliN_left);
 }
 
 void serialPrintReceivedData() {
   Serial.print(" Mode: ");
   Serial.print(mode_);
-  Serial.print(" Loadcell Target: ");
-  Serial.print(loadcell_target);
-  Serial.print(" Demanded KSA Position: ");
-  Serial.print(ksa_position);
+  Serial.print(" OS Offset: ");
+  Serial.print(os_offset);
+  Serial.print(" KSA Position Target: ");
+  Serial.print(ksa_position_target);
+  Serial.print(" Moverspeedn: ");                             
+  Serial.print(moverspeed);
+  Serial.print(" KSA Way Length: ");
+  Serial.print(ksa_way_length);
+  Serial.print(" Force MilliN Target: ");
+  Serial.print(force_MilliN_target);
   Serial.print(" Kp, Ki, Kd: ");
   Serial.print(Kp);
   Serial.print(", ");
   Serial.print(Ki);
   Serial.print(", ");
-  Serial.print(Kd);
-  Serial.print(" PID Influence: ");
-  Serial.println(pid_influence);
+  Serial.println(Kd);
 }
 
 /*
@@ -508,15 +529,15 @@ void getLoadcells() {
   // check for new data/start next conversion:
   if (Loadcell_Right.update()) {
     newDataReady = true;
-    //catchTimeBetweenMeasurements(); // uncommand if needed
+    //catchTimeBetweenMeasurements(); // uncommand for validation only
   }
 
   Loadcell_Left.update();
 
   if ((newDataReady)) {     // you could filter data with moving average but it would intruduce lag
-    loadcell_value_right = Loadcell_Right.getData();
-    loadcell_value_left = Loadcell_Left.getData();
-    loadcell_value_combined = (loadcell_value_right + loadcell_value_left);
+    force_milliN_right = Loadcell_Right.getData() * 9.81;
+    force_milliN_left = Loadcell_Left.getData() * 9.81;
+    force_milliN_combined = (force_milliN_right + force_milliN_left);
     newDataReady = false;
   }
 }
@@ -529,44 +550,33 @@ void getEndswitches() {
 void setModbus() {
   mb.Ists(OS_ENDSWITCH_RIGHT_ISTS, os_endswitch_right);
   mb.Ists(OS_ENDSWITCH_LEFT_ISTS, os_endswitch_left);
-  mb.Ireg(FORCE_RIGHT_REAL_IREG, short(loadcell_value_right * 10));  // have to be ints thats why we scale up on serverside to not lose precision
-  mb.Ireg(FORCE_LEFT_REAL_IREG, short(loadcell_value_left * 10));
+  mb.Ireg(FORCE_COMBINED_REAL_IREG, short(force_milliN_combined));
+  mb.Ireg(FORCE_RIGHT_REAL_IREG, short(force_milliN_right));  // have to be ints thats why we scale up on serverside to not lose precision
+  mb.Ireg(FORCE_LEFT_REAL_IREG, short(force_milliN_left));
 }
 
 void getModbus() {
+  // conversions because MODBUS cant handle floats
   mode_ = mb.Hreg(MODE_HREG);
-  loadcell_target = mb.Hreg(FORCE_TARGET_HREG) / 9.81;  //--> mN to gramm
-  ksa_position = mb.Hreg(POSITION_KSA_HREG);
-  Kp = (double)mb.Hreg(KP_HREG) / 1000;
-  Ki = (double)mb.Hreg(I_HREG) / 1000;
-  Kd = (double)mb.Hreg(D_HREG) / 1000;
-  pid_influence = (double)mb.Hreg(PID_INFLUENCE_HREG) / 10; // passed in promille
-}
-
-void catchLooptime() {
-  static unsigned long prev_millis;
-  unsigned long looptime;
-  looptime = millis() - prev_millis;
-  prev_millis = millis();
-  Serial.print("Looptime in ms: ");
-  Serial.println(looptime);
-}
-
-void catchTimeBetweenMeasurements() {
-  static unsigned long prev_millis;
-  unsigned long time_between_measurements;
-  time_between_measurements = millis() - prev_millis;
-  prev_millis = millis();
-  Serial.print("Time between Loadcell Measurements: ");
-  Serial.println(time_between_measurements);
+  os_offset = (double)((short)mb.Hreg(OS_OFFSET_HREG)) / 1000;
+  ksa_position_target = (double)((short)mb.Hreg(KSA_POSITION_TARGET_HREG)) / 1000;
+  moverspeed = (double)((short)mb.Hreg(MOVERSPEED_HREG));
+  ksa_way_length = (double)((short)mb.Hreg(KSA_WAY_LENGTH_HREG));
+  force_MilliN_target = (double)((short)mb.Hreg(FORCE_TARGET_HREG));
+  Kp = (double)((short)mb.Hreg(KP_HREG)) / 100000;
+  Ki = (double)((short)mb.Hreg(KI_HREG)) / 100000;
+  Kd = (double)((short)mb.Hreg(KD_HREG)) / 100000;
+  ksa_duration = (ksa_way_length/moverspeed)*1000;  // in ms
 }
 
 double ksaPosToDegree(double desired_ksa_pos) {
-  //modified binary search in look up table
+  /*
+     Inverse kin with LookUpTable and Binary Search
+  */
 
-  double const lut_ksa[82] = {0.091, 0.190, 0.289, 0.389, 0.489, 0.589, 0.689, 0.790, 0.890, 0.991, 1.093, 1.194, 1.296, 1.398, 1.500, 1.602, 1.704, 1.807, 1.910, 2.013, 2.116, 2.219, 2.323, 2.426, 2.530, 2.634, 2.737, 2.842, 2.946, 3.050, 3.154, 3.258, 3.363, 3.467, 3.572, 3.677, 3.781, 3.886, 3.991, 4.095, 4.200, 4.305, 4.409, 4.514, 4.619, 4.723, 4.828, 4.933, 5.037, 5.141, 5.246, 5.350, 5.454, 5.558, 5.662, 5.766, 5.870, 5.974, 6.077, 6.180, 6.283, 6.386, 6.489, 6.592, 6.694, 6.797, 6.899, 7.000, 7.102, 7.203, 7.304, 7.405, 7.506, 7.606, 7.706, 7.806, 7.905, 8.004, 8.103, 8.201, 8.300, 8.397};
-  int const lut_ksa_length = 82;
-  double const start_degree = -20;
+  double const lut_ksa[141] = { -12.95, -12.88, -12.80, -12.73, -12.66, -12.58, -12.51, -12.43, -12.36, -12.28, -12.21, -12.13, -12.05, -11.97, -11.89, -11.82, -11.74, -11.66, -11.58, -11.50, -11.41, -11.33, -11.25, -11.17, -11.09, -11.00, -10.92, -10.83, -10.75, -10.67, -10.58, -10.49, -10.41, -10.32, -10.23, -10.15, -10.06, -9.97, -9.88, -9.79, -9.70, -9.62, -9.53, -9.43, -9.34, -9.25, -9.16, -9.07, -8.98, -8.89, -8.79, -8.70, -8.61, -8.51, -8.42, -8.33, -8.23, -8.14, -8.04, -7.95, -7.85, -7.76, -7.66, -7.56, -7.47, -7.37, -7.27, -7.18, -7.08, -6.98, -6.89, -6.79, -6.69, -6.59, -6.49, -6.39, -6.30, -6.20, -6.10, -6.00, -5.90, -5.80, -5.70, -5.60, -5.50, -5.40, -5.30, -5.20, -5.10, -5.00, -4.90, -4.80, -4.70, -4.60, -4.50, -4.40, -4.30, -4.20, -4.10, -4.00, -3.90, -3.80, -3.70, -3.60, -3.50, -3.40, -3.30, -3.20, -3.10, -3.00, -2.90, -2.80, -2.70, -2.60, -2.50, -2.40, -2.30, -2.20, -2.10, -2.01, -1.91, -1.81, -1.71, -1.61, -1.52, -1.42, -1.32, -1.22, -1.13, -1.03, -0.94, -0.84, -0.74, -0.65, -0.55, -0.46, -0.37, -0.27, -0.18, -0.08, 0.01};
+  int const lut_ksa_length = 141;
+  double const start_degree = -48.5;
   double const steps = 0.5;
 
   if (desired_ksa_pos < lut_ksa[0]) {
@@ -596,4 +606,28 @@ double ksaPosToDegree(double desired_ksa_pos) {
   } else {
     return start_degree + steps * hi;
   }
+}
+
+/*
+ * **********************************************************************************************************
+ * **************************************  VALIDATION FUNCTIONS  ********************************************
+ * **********************************************************************************************************
+*/
+
+void catchLooptime() {
+  static unsigned long prev_millis;
+  unsigned long looptime;
+  looptime = millis() - prev_millis;
+  prev_millis = millis();
+  Serial.print("Looptime in ms: ");
+  Serial.println(looptime);
+}
+
+void catchTimeBetweenMeasurements() {
+  static unsigned long prev_millis;
+  unsigned long time_between_measurements;
+  time_between_measurements = millis() - prev_millis;
+  prev_millis = millis();
+  Serial.print("Time between Loadcell Measurements: ");
+  Serial.println(time_between_measurements);
 }

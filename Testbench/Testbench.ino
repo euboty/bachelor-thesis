@@ -1,24 +1,24 @@
 /*
  * Author: Florian Geissler
  * Usecase: Test Bench for KSA system of Mechatronic Gripper
- * Last change: 13.03.2021
+ * Last change: 25.03.2021
  */
 
 const int DIR_PIN = 2;  // pinout for tb6600 motor driver
 const int STEP_PIN = 3; // pinout for tb6600 motor driver
 const int START_SIGNAL = 7; // pinout octocoupler
+const int START_SWITCH = 8; // pinout manual switch
 
-long steps_should; 
-long steps_now = 0; 
-long steps_should_before = 0;
-long steps_total = 0;
-const int speed_ = 50;  // motor and motor driver specific
-unsigned long t = 0;
-unsigned long t_start = 0;
-
-const long amplitude_steps = 730; // amplitude steps for sine
-double ksa_time = 200; // ksa time in milliseconds
+// set to your needs
+const double moverspeed = 500; // in mm/s
+const double ksa_way_length = 142; // in mm
+double ksa_time = (ksa_way_length/moverspeed)*1000; // ksa time in milliseconds
 double ff = 1/(ksa_time*1000);  //frequency
+
+const double ksa_amplitude = 8.4; // in mm
+const int steps_per_rev = 3200;
+const double diameter_roll = 12; // in mm
+const long amplitude_steps = (long)(ksa_amplitude*(steps_per_rev/(diameter_roll*PI))); // step amplitude
 
 void setup()
 {
@@ -26,11 +26,21 @@ void setup()
     pinMode(DIR_PIN,OUTPUT);
     pinMode(STEP_PIN,OUTPUT);
     pinMode(START_SIGNAL,INPUT_PULLUP);
+    pinMode(START_SWITCH,INPUT_PULLUP);
+    Serial.println(amplitude_steps);
 }
 
 void loop(){  
   
-  if (!digitalRead(START_SIGNAL)) {  // internal pullup resistor inverts logic
+  static long steps_should; 
+  static long steps_now = 0; 
+  static long steps_should_before = 0;
+  static long steps_total = 0;
+  static const int speed_ = 50;  // motor and motor driver specific
+  static unsigned long t = 0;
+  static unsigned long t_start = 100000000000000000;  // big value so it doesnt start by itself on boot, gets resetted anyway
+  
+  if (!digitalRead(START_SIGNAL)||!digitalRead(START_SWITCH)) {  // internal pullup resistor inverts logic
     t_start = micros();
   }
   
